@@ -18,7 +18,7 @@ action log.
 
 | Component | Where to look | Notes |
 | --- | --- | --- |
-| Proxyble wizard and CLI | `/var/log/proxyble/*.log` | Each action opens a timestamped log such as `config-start-YYYYMMDD-HHMMSS.log`. The directory comes from `[proxyble] log_dir` in `/etc/proxyble/config.ini`. |
+| Proxyble  and CLI | `/var/log/proxyble/*.log` | Each action opens a timestamped log such as `config-start-YYYYMMDD-HHMMSS.log`. The directory comes from `[proxyble] log_dir` in `/etc/proxyble/config.ini`. |
 | `proxyble-rule-agent` | `/var/log/proxyble-rule-agent/YYYY-MM-DD.log` | Daily rule-agent logs and rule audit events. Rule state is under `/var/lib/proxyble-rule-agent`, but that is state, not log output. |
 | `proxyble-rule-agent` systemd service | `journalctl -u proxyble-rule-agent.service` | The service is oneshot. The path and timer units can also be checked with `journalctl -u proxyble-rule-agent.path` and `journalctl -u proxyble-rule-agent.timer`. |
 | HAProxy | `journalctl -u haproxy.service` | Proxyble does not configure a default HAProxy file access log. When RioDB is enabled, HAProxy sends structured traffic events to RioDB over local UDP. |
