@@ -9,6 +9,9 @@ Proxyble is built for professionals who want practical control without building
 every proxy and firewall workflow by hand. Download it, run the guided setup,
 answer a few questions, and enable protection.
 
+A separate GitHub repository contains a Codex-ready project to help you build
+Proxyble protection policies with AI. See [Proxyble AI Policy Maker](https://github.com/proxyble-core/proxyble-ai-policy-maker).
+
 ## What Proxyble Is For
 
 Use Proxyble when you want to:
