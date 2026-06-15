@@ -1,3 +1,19 @@
+// Proxyble protects APIs, web applications, and TCP services.
+// Copyright (C) 2026 Lucio D'Orazio Pedro de Matos
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; version 2 of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along
+// with this program; if not, write to the Free Software Foundation, Inc.,
+// 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
 package main
 
 // haproxy.go owns all HAProxy-specific validation, installation hardening, and
@@ -9,6 +25,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -446,7 +463,10 @@ func ensureHAProxy33APTSource(ctx context.Context, out interface{ Write([]byte) 
 	}
 	codename := haproxyAPTCodename(p)
 	if codename == "" {
-		return fmt.Errorf("official HAProxy %s apt packages require Ubuntu 22.04/24.04 or Debian 12/13; detected %s", haproxyRequiredBranch, p.PrettyName)
+		return fmt.Errorf("official HAProxy %s apt packages require a detected apt codename; detected %s without VERSION_CODENAME/UBUNTU_CODENAME", haproxyRequiredBranch, p.PrettyName)
+	}
+	if err := requireHAProxyAPTRelease(ctx, distro, codename); err != nil {
+		return err
 	}
 	keyPath := "/usr/share/keyrings/HAPROXY-key-community.asc"
 	if err := downloadFile(ctx, out, haproxyAPTKeyURL, keyPath, 0o644); err != nil {
@@ -468,41 +488,56 @@ func ensureHAProxy33APTSource(ctx context.Context, out interface{ Write([]byte) 
 }
 
 func haproxyAPTSourceLine(keyPath, distro, codename string) string {
-	return fmt.Sprintf("deb [arch=amd64,arm64 signed-by=%s] https://www.haproxy.com/download/haproxy/performance/%s/ha%s %s main\n", keyPath, distro, haproxyRepoVersionNumerals, codename)
+	return fmt.Sprintf("deb [arch=amd64,arm64 signed-by=%s] %s %s main\n", keyPath, haproxyAPTRepoBaseURL(distro), codename)
+}
+
+func haproxyAPTRepoBaseURL(distro string) string {
+	return fmt.Sprintf("https://www.haproxy.com/download/haproxy/performance/%s/ha%s", distro, haproxyRepoVersionNumerals)
+}
+
+func haproxyAPTReleaseURL(distro, codename string) string {
+	return fmt.Sprintf("%s/dists/%s/Release", haproxyAPTRepoBaseURL(distro), codename)
 }
 
 func haproxyAPTCodename(p Platform) string {
 	codename := strings.ToLower(strings.TrimSpace(p.Codename))
-	if codename != "" {
-		switch strings.ToLower(strings.TrimSpace(p.ID)) {
-		case "ubuntu":
-			if codename == "jammy" || codename == "noble" {
-				return codename
-			}
-		case "debian":
-			if codename == "bookworm" || codename == "trixie" {
-				return codename
-			}
-		}
+	if codename == "" || !safeAPTCodename(codename) {
+		return ""
 	}
-	version := strings.TrimSpace(p.VersionID)
 	switch strings.ToLower(strings.TrimSpace(p.ID)) {
-	case "ubuntu":
-		switch version {
-		case "22.04":
-			return "jammy"
-		case "24.04":
-			return "noble"
-		}
-	case "debian":
-		switch majorVersion(version) {
-		case "12":
-			return "bookworm"
-		case "13":
-			return "trixie"
-		}
+	case "ubuntu", "debian":
+		return codename
 	}
 	return ""
+}
+
+func safeAPTCodename(codename string) bool {
+	for _, r := range codename {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func requireHAProxyAPTRelease(ctx context.Context, distro, codename string) error {
+	releaseURL := haproxyAPTReleaseURL(distro, codename)
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodHead, releaseURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("check HAProxy %s apt repository for %s %s: %w", haproxyRequiredBranch, distro, codename, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return nil
+	}
+	return fmt.Errorf("official HAProxy %s apt packages are not published for %s codename %q yet (checked %s: HTTP %s)", haproxyRequiredBranch, distro, codename, releaseURL, resp.Status)
 }
 
 func ensureHAProxy33RPMSource(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform) error {

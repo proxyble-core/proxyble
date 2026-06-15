@@ -1,3 +1,19 @@
+// Proxyble protects APIs, web applications, and TCP services.
+// Copyright (C) 2026 Lucio D'Orazio Pedro de Matos
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; version 2 of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along
+// with this program; if not, write to the Free Software Foundation, Inc.,
+// 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
 package main
 
 import (
@@ -213,23 +229,33 @@ func TestHAProxyAPTCodename(t *testing.T) {
 		want string
 	}{
 		{
-			name: "ubuntu noble",
-			p:    Platform{ID: "ubuntu", VersionID: "24.04", Codename: "noble"},
-			want: "noble",
+			name: "ubuntu 26.04 resolute",
+			p:    Platform{ID: "ubuntu", VersionID: "26.04", Codename: "resolute"},
+			want: "resolute",
 		},
 		{
-			name: "ubuntu version fallback",
+			name: "future ubuntu codename",
+			p:    Platform{ID: "ubuntu", VersionID: "28.04", Codename: "future"},
+			want: "future",
+		},
+		{
+			name: "future debian codename",
+			p:    Platform{ID: "debian", VersionID: "14", Codename: "forky"},
+			want: "forky",
+		},
+		{
+			name: "missing codename",
 			p:    Platform{ID: "ubuntu", VersionID: "22.04"},
-			want: "jammy",
+			want: "",
 		},
 		{
-			name: "debian bookworm",
-			p:    Platform{ID: "debian", VersionID: "12"},
-			want: "bookworm",
+			name: "unsafe codename",
+			p:    Platform{ID: "ubuntu", VersionID: "26.04", Codename: "resolute main"},
+			want: "",
 		},
 		{
-			name: "unsupported ubuntu",
-			p:    Platform{ID: "ubuntu", VersionID: "20.04", Codename: "focal"},
+			name: "unsupported apt distro",
+			p:    Platform{ID: "mint", VersionID: "22", Codename: "wilma"},
 			want: "",
 		},
 	}
@@ -239,6 +265,14 @@ func TestHAProxyAPTCodename(t *testing.T) {
 				t.Fatalf("haproxyAPTCodename = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHAProxyAPTReleaseURLUsesDetectedCodename(t *testing.T) {
+	got := haproxyAPTReleaseURL("ubuntu", "resolute")
+	want := "https://www.haproxy.com/download/haproxy/performance/ubuntu/ha33/dists/resolute/Release"
+	if got != want {
+		t.Fatalf("haproxyAPTReleaseURL = %q, want %q", got, want)
 	}
 }
 
