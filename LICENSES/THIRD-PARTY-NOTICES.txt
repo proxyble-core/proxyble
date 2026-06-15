@@ -1,0 +1,17 @@
+                NOTICE
+
+INDEX:
+
+Proxyble downloads and deploys the following open source software:
+
+    HAProxy
+    version: Latest
+    https://github.com/haproxy
+    License: GNU General Public License version 2, in this context.
+    If you develop custom C header files for HAproxy, LGPLv2.1.
+
+    NFTables
+    version: Latest
+    https://wiki.nftables.org/
+    License: GNU General Public License version 2 or later
+
