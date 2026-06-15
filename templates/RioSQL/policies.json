@@ -1,0 +1,359 @@
+{
+  "schema_version": 1,
+  "description": "Proxyble RioSQL policy catalog. The wizard should show these policies to users and deploy the listed files in order for each selected policy.",
+  "template_root": "proxyble/templates/RioSQL",
+  "always_required": [
+    "00-stream-rule-queue.sql"
+  ],
+  "policies": [
+    {
+      "id": "api_flood_control",
+      "name": "API Flood Control",
+      "summary": "Detects sudden request floods, broad endpoint spread, high error pressure, and TCP connection bursts.",
+      "visibility": "HTTP-visible with TCP/L4 fallback",
+      "severity": "HIGH",
+      "priority": "HIGH",
+      "metric_layer": "request-arrival primary; request-completion and TCP arrival fallback",
+      "policy_path": "Busy Deflection -> Application Rate Response -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-arrival.sql",
+        "01-stream-http-on-completion.sql",
+        "01-stream-tcp-on-arrival.sql",
+        "10-http-arrival-src-req-10s.sql",
+        "10-http-arrival-src-req-20s.sql",
+        "10-http-arrival-src-req-60s.sql",
+        "10-http-arrival-src-req-30m.sql",
+        "10-http-arrival-src-path-5m.sql",
+        "10-http-arrival-src-ts-60s.sql",
+        "10-http-arrival-src-rate-usage-10s.sql",
+        "10-http-src-req-30s.sql",
+        "10-http-src-flood-error-30s.sql",
+        "10-http-src-total-time-30s.sql",
+        "10-http-global-req-30s.sql",
+        "10-http-global-flood-error-30s.sql",
+        "10-tcp-arrival-src-conn-10s.sql",
+        "policies/20-api-flood-control.sql"
+      ]
+    },
+    {
+      "id": "credential_pressure_control",
+      "name": "Credential Pressure Control",
+      "summary": "Detects credential stuffing and password guessing against login, token, auth, and session endpoints.",
+      "visibility": "HTTP-visible only",
+      "severity": "HIGH",
+      "priority": "HIGH",
+      "metric_layer": "request-completion",
+      "policy_path": "Endpoint Rate Limit -> Connection Start Rate Cap -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-auth-src-total-1m.sql",
+        "10-http-auth-src-total-5m.sql",
+        "10-http-auth-src-total-30m.sql",
+        "10-http-auth-src-fail-1m.sql",
+        "10-http-auth-src-fail-5m.sql",
+        "10-http-auth-src-loginid-5m.sql",
+        "10-http-auth-src-lowbytes-5m.sql",
+        "policies/20-credential-pressure-control.sql"
+      ]
+    },
+    {
+      "id": "endpoint_discovery_control",
+      "name": "Endpoint Discovery Control",
+      "summary": "Detects route scanning, hidden endpoint probing, uncommon methods, and high 400/404/405 ratios.",
+      "visibility": "HTTP-visible only",
+      "severity": "HIGH",
+      "priority": "HIGH",
+      "metric_layer": "request-completion",
+      "policy_path": "Endpoint Rate Limit -> Explicit Reject -> Silent Drop",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-discovery-src-path-60s.sql",
+        "10-http-discovery-src-path-5m.sql",
+        "10-http-discovery-src-miss-60s.sql",
+        "10-http-discovery-src-miss-5m.sql",
+        "10-http-discovery-src-sensitive-5m.sql",
+        "10-http-discovery-src-bad-method-5m.sql",
+        "policies/20-endpoint-discovery-control.sql"
+      ]
+    },
+    {
+      "id": "scraping_and_ai_crawler_cost_control",
+      "name": "Scraping And AI Crawler Cost Control",
+      "summary": "Detects excessive successful reads, high bandwidth use, broad URL traversal, and crawler-like content extraction.",
+      "visibility": "HTTP-visible only",
+      "severity": "MEDIUM",
+      "priority": "HIGH",
+      "metric_layer": "request-completion",
+      "policy_path": "Bandwidth Shaping -> Application Rate Response -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-read-src-get-15m.sql",
+        "10-http-read-src-write-15m.sql",
+        "10-http-read-src-url-15m.sql",
+        "10-http-read-src-query-15m.sql",
+        "10-http-src-bytes-15m.sql",
+        "policies/20-scraping-and-ai-crawler-cost-control.sql"
+      ]
+    },
+    {
+      "id": "expensive_endpoint_cost_control",
+      "name": "Expensive Endpoint Cost Control",
+      "summary": "Detects normal-looking request volumes that create excessive latency, compute cost, timeouts, or heavy response cost.",
+      "visibility": "HTTP-visible only",
+      "severity": "MEDIUM",
+      "priority": "HIGH",
+      "metric_layer": "request-completion",
+      "policy_path": "Endpoint Rate Limit -> Busy Deflection -> Bandwidth Shaping",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-expensive-src-time-1m.sql",
+        "10-http-expensive-src-time-5m.sql",
+        "10-http-expensive-src-timeout-5m.sql",
+        "10-http-expensive-src-error-5m.sql",
+        "policies/20-expensive-endpoint-cost-control.sql"
+      ]
+    },
+    {
+      "id": "retry_storm_control",
+      "name": "Retry Storm Control",
+      "summary": "Detects broken clients that rapidly retry after 429, 5xx, or 503 responses and amplify partial outages.",
+      "visibility": "HTTP-visible with TCP/L4 fallback",
+      "severity": "MEDIUM",
+      "priority": "HIGH",
+      "metric_layer": "request-completion primary; TCP arrival fallback",
+      "policy_path": "Application Rate Response -> Timeout Tightening -> Connection Start Rate Cap",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "01-stream-tcp-on-arrival.sql",
+        "10-http-src-req-30s.sql",
+        "10-http-src-req-60s.sql",
+        "10-http-src-req-30m.sql",
+        "10-http-src-flood-error-30s.sql",
+        "10-http-src-ts-30s.sql",
+        "10-http-retry-src-failed-signature-30s.sql",
+        "10-http-global-req-30s.sql",
+        "10-http-global-flood-error-30s.sql",
+        "10-tcp-arrival-src-conn-10s.sql",
+        "policies/20-retry-storm-control.sql"
+      ]
+    },
+    {
+      "id": "slow_client_and_connection_hoarding_control",
+      "name": "Slow Client And Connection Hoarding Control",
+      "summary": "Detects sources holding sockets or requests open with low throughput, long duration, or high connection occupancy.",
+      "visibility": "HTTP-visible with TCP/L4 fallback",
+      "severity": "HIGH",
+      "priority": "HIGH",
+      "metric_layer": "request-completion primary; TCP arrival/completion fallback",
+      "policy_path": "Timeout Tightening -> Concurrent Connection Cap -> Silent Drop",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "01-stream-tcp-on-arrival.sql",
+        "01-stream-tcp-on-completion.sql",
+        "10-http-src-total-time-5m.sql",
+        "10-http-src-bytes-5m.sql",
+        "10-http-slow-src-lowbytes-5m.sql",
+        "10-http-slow-src-timeout-5m.sql",
+        "10-tcp-arrival-src-current-1m.sql",
+        "10-tcp-completion-src-session-5m.sql",
+        "10-tcp-completion-src-lowbytes-5m.sql",
+        "policies/20-slow-client-and-connection-hoarding-control.sql"
+      ]
+    },
+    {
+      "id": "mcp_tool_pressure_control",
+      "name": "MCP Tool Pressure Control",
+      "summary": "Detects agentic MCP tool or resource calls at machine speed, with high latency, cost, byte output, or route spread.",
+      "visibility": "HTTP-visible only",
+      "severity": "HIGH",
+      "priority": "HIGH",
+      "metric_layer": "request-completion",
+      "policy_path": "Endpoint Rate Limit -> Busy Deflection -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-mcp-src-tool-1m.sql",
+        "10-http-mcp-src-tool-5m.sql",
+        "10-http-mcp-src-time-5m.sql",
+        "10-http-mcp-src-error-5m.sql",
+        "policies/20-mcp-tool-pressure-control.sql"
+      ]
+    },
+    {
+      "id": "mcp_session_occupancy_control",
+      "name": "MCP Session Occupancy Control",
+      "summary": "Detects long-lived or over-abundant MCP streaming sessions, reconnect churn, and scarce session occupancy.",
+      "visibility": "HTTP-visible with TCP/L4 fallback",
+      "severity": "MEDIUM",
+      "priority": "HIGH",
+      "metric_layer": "request-completion primary; TCP arrival fallback",
+      "policy_path": "Timeout Tightening -> Concurrent Connection Cap -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "01-stream-tcp-on-arrival.sql",
+        "10-http-mcp-src-session-15m.sql",
+        "10-http-mcp-src-long-15m.sql",
+        "10-http-mcp-src-time-5m.sql",
+        "10-tcp-arrival-src-current-1m.sql",
+        "policies/20-mcp-session-occupancy-control.sql"
+      ]
+    },
+    {
+      "id": "large_download_and_export_control",
+      "name": "Large Download And Export Control",
+      "summary": "Detects repeated exports, archive/report downloads, very large responses, and high byte-to-request ratios.",
+      "visibility": "HTTP-visible only",
+      "severity": "MEDIUM",
+      "priority": "MEDIUM",
+      "metric_layer": "request-completion",
+      "policy_path": "Bandwidth Shaping -> Application Rate Response -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-export-src-bytes-15m.sql",
+        "10-http-export-src-bytes-1h.sql",
+        "10-http-export-src-bytes-24h.sql",
+        "10-http-export-src-query-1h.sql",
+        "policies/20-large-download-and-export-control.sql"
+      ]
+    },
+    {
+      "id": "cache_miss_and_origin_pressure_control",
+      "name": "Cache Miss And Origin Pressure Control",
+      "summary": "Detects cache-miss-heavy variant generation, query-string churn, and origin pressure from cacheable traffic.",
+      "visibility": "HTTP-visible only",
+      "severity": "MEDIUM",
+      "priority": "MEDIUM",
+      "metric_layer": "request-completion",
+      "policy_path": "Endpoint Rate Limit -> Busy Deflection -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-cache-src-fullurl-5m.sql",
+        "10-http-cache-src-fullurl-15m.sql",
+        "10-http-cache-src-query-5m.sql",
+        "10-http-cache-src-query-15m.sql",
+        "10-http-cache-src-miss-5m.sql",
+        "10-http-cache-src-miss-15m.sql",
+        "10-http-src-total-time-5m.sql",
+        "policies/20-cache-miss-and-origin-pressure-control.sql"
+      ]
+    },
+    {
+      "id": "business_flow_automation_control",
+      "name": "Business Flow Automation Control",
+      "summary": "Detects automation performing legitimate business actions too quickly or persistently, such as holds, votes, submits, and checkout flows.",
+      "visibility": "HTTP-visible only",
+      "severity": "MEDIUM",
+      "priority": "MEDIUM",
+      "metric_layer": "request-arrival",
+      "policy_path": "Endpoint Rate Limit -> Busy Deflection -> Explicit Reject",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-arrival.sql",
+        "10-http-arrival-src-business-action-5m.sql",
+        "10-http-arrival-src-business-action-15m.sql",
+        "10-http-arrival-src-post-5m.sql",
+        "10-http-arrival-src-ts-60s.sql",
+        "10-http-arrival-business-global-5m.sql",
+        "policies/20-business-flow-automation-control.sql"
+      ]
+    },
+    {
+      "id": "gray_zone_automation_shaping",
+      "name": "Gray-Zone Automation Shaping",
+      "summary": "Detects clients that persistently stay near static thresholds with little idle time and accumulating bytes or cost.",
+      "visibility": "HTTP-visible only",
+      "severity": "LOW",
+      "priority": "MEDIUM",
+      "metric_layer": "request-completion",
+      "policy_path": "Application Rate Response -> Bandwidth Shaping",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "01-stream-tcp-on-arrival.sql",
+        "10-http-src-req-5m.sql",
+        "10-http-src-req-30m.sql",
+        "10-http-src-req-2h.sql",
+        "10-http-src-bytes-2h.sql",
+        "10-http-src-total-time-15m.sql",
+        "10-http-gray-src-rate-usage-5m.sql",
+        "policies/20-gray-zone-automation-shaping.sql"
+      ]
+    },
+    {
+      "id": "known_bad_source_ejection",
+      "name": "Known Bad Source Ejection",
+      "summary": "Detects high-confidence hostile sources, severe repeated violations, scanner patterns, malformed requests, and obvious attack probes.",
+      "visibility": "HTTP-visible with TCP/L4 fallback",
+      "severity": "HIGH",
+      "priority": "HIGH",
+      "metric_layer": "request-completion primary; TCP arrival fallback",
+      "policy_path": "Explicit Reject -> Silent Drop",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "01-stream-tcp-on-arrival.sql",
+        "10-http-hostile-src-pattern-15m.sql",
+        "10-http-hostile-src-pattern-1h.sql",
+        "10-http-hostile-src-forbidden-15m.sql",
+        "10-http-hostile-src-malformed-15m.sql",
+        "10-http-discovery-src-sensitive-5m.sql",
+        "10-http-discovery-src-bad-method-5m.sql",
+        "10-http-auth-src-fail-5m.sql",
+        "10-http-src-flood-error-30s.sql",
+        "10-tcp-arrival-src-conn-10s.sql",
+        "policies/20-known-bad-source-ejection.sql"
+      ]
+    },
+    {
+      "id": "legitimate_burst_protection",
+      "name": "Legitimate Burst Protection",
+      "summary": "Detects sharp but clean traffic bursts with high success rate so Proxyble can apply short pressure relief instead of long bans.",
+      "visibility": "HTTP-visible with TCP/L4 fallback",
+      "severity": "LOW",
+      "priority": "MEDIUM",
+      "metric_layer": "request-completion",
+      "policy_path": "Busy Deflection",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-src-req-2m.sql",
+        "10-http-src-req-30m.sql",
+        "10-http-global-req-2m.sql",
+        "10-http-global-req-30m.sql",
+        "10-http-src-success-2m.sql",
+        "10-http-src-client-server-error-2m.sql",
+        "10-http-src-total-time-15m.sql",
+        "policies/20-legitimate-burst-protection.sql"
+      ]
+    },
+    {
+      "id": "analytics_skew_and_noise_control",
+      "name": "Analytics Skew And Noise Control",
+      "summary": "Detects repetitive synthetic traffic that pollutes page views, forms, counters, metrics, and ranking signals.",
+      "visibility": "HTTP-visible only",
+      "severity": "LOW",
+      "priority": "LOW",
+      "metric_layer": "request-completion",
+      "policy_path": "Application Rate Response -> Busy Deflection",
+      "files": [
+        "00-stream-rule-queue.sql",
+        "01-stream-http-on-completion.sql",
+        "10-http-analytics-src-path-10m.sql",
+        "10-http-analytics-src-status-10m.sql",
+        "10-http-analytics-global-10m.sql",
+        "10-http-src-ts-10m.sql",
+        "policies/20-analytics-skew-and-noise-control.sql"
+      ]
+    }
+  ]
+}
