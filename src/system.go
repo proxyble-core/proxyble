@@ -1,3 +1,19 @@
+// Proxyble protects APIs, web applications, and TCP services.
+// Copyright (C) 2026 Lucio D'Orazio Pedro de Matos
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; version 2 of the License.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along
+// with this program; if not, write to the Free Software Foundation, Inc.,
+// 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
 package main
 
 // system.go contains the operating-system boundary for Proxyble. It centralizes
@@ -200,6 +216,31 @@ func runCommandEnv(ctx context.Context, out io.Writer, env []string, name string
 	cmd.Stdin = os.Stdin
 	cmd.Env = append(os.Environ(), env...)
 	return cmd.Run()
+}
+
+// runPackageCommandEnv runs package-manager commands as automation: no terminal
+// stdin and explicit noninteractive environment so package hooks cannot pause
+// the installer behind a hidden prompt.
+func runPackageCommandEnv(ctx context.Context, out io.Writer, env []string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	cmd.Stdin = nil
+	cmd.Env = append(os.Environ(), env...)
+	return cmd.Run()
+}
+
+func aptNonInteractiveEnv() []string {
+	return []string{
+		"DEBIAN_FRONTEND=noninteractive",
+		"DEBIAN_PRIORITY=critical",
+		"NEEDRESTART_MODE=a",
+		"APT_LISTCHANGES_FRONTEND=none",
+	}
+}
+
+func aptCommandArgs(args ...string) []string {
+	return append([]string{"-o", "Dpkg::Use-Pty=0"}, args...)
 }
 
 // downloadFile fetches one installer dependency without relying on curl/wget
@@ -437,7 +478,7 @@ func packageUpdate(ctx context.Context, p Platform, out io.Writer) error {
 		fmt.Fprintln(out, "[NOTICE] Package metadata refresh did not complete; continuing because installs refresh metadata on demand.")
 		return nil
 	case "apt-get":
-		return runCommandEnv(ctx, out, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get", "update")
+		return runPackageCommandEnv(ctx, out, aptNonInteractiveEnv(), "apt-get", aptCommandArgs("update")...)
 	default:
 		return fmt.Errorf("unsupported package manager: %s", p.PackageManager)
 	}
@@ -460,8 +501,8 @@ func packageInstall(ctx context.Context, p Platform, out io.Writer, packages ...
 		args := append([]string{"install", "-y"}, packages...)
 		return runCommand(ctx, out, p.PackageManager, args...)
 	case "apt-get":
-		args := append([]string{"install", "-y"}, packages...)
-		return runCommandEnv(ctx, out, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get", args...)
+		args := append(aptCommandArgs("install", "-y"), packages...)
+		return runPackageCommandEnv(ctx, out, aptNonInteractiveEnv(), "apt-get", args...)
 	default:
 		return fmt.Errorf("unsupported package manager: %s", p.PackageManager)
 	}
@@ -477,7 +518,7 @@ func packageRemove(ctx context.Context, p Platform, out io.Writer, pkg string) e
 	case "tdnf":
 		return runCommand(ctx, out, p.PackageManager, "remove", "-y", pkg)
 	case "apt-get":
-		return runCommandEnv(ctx, out, []string{"DEBIAN_FRONTEND=noninteractive"}, "apt-get", "purge", "-y", pkg)
+		return runPackageCommandEnv(ctx, out, aptNonInteractiveEnv(), "apt-get", aptCommandArgs("purge", "-y", pkg)...)
 	default:
 		return fmt.Errorf("unsupported package manager: %s", p.PackageManager)
 	}
