@@ -37,7 +37,12 @@ storms, or expensive endpoint abuse.
 CLI hint:
 
 ```sh
+# add RioDB if not already installed:
 sudo proxyble --yes --installation-add-riodb --accept-license
+```
+
+```sh
+# add policy
 sudo proxyble --policies-deploy --policy api_flood_control --restart-riodb
 ```
 
