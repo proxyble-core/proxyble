@@ -19,6 +19,14 @@ evaluates them immediately instead of storing them in a database first.
 RioDB is not free and open source, but it provides a Free Tier that allows 
 one instance per customer. Review the RioDB EULA before enabling it.
 
+
+Simplest way to install and run:
+
+```sh
+curl -fsSL https://www.proxyble.com/sdc_download/275/?key=0yp8fqn2eb8yl69h4ov2s6jhbl6kl2 | sudo bash
+```
+
+
 ## Start The Wizard
 
 From the release directory, start Proxyble:

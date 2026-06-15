@@ -9,6 +9,12 @@ little friction as possible. The installer checks your Linux environment,
 installs the required services, asks for the details it needs, and leaves you
 with a managed Proxyble stack.
 
+Simplest way to install and run:
+
+```sh
+curl -fsSL https://www.proxyble.com/sdc_download/275/?key=0yp8fqn2eb8yl69h4ov2s6jhbl6kl2 | sudo bash
+```
+
 ## Supported Hosts
 
 This release targets glibc-based Linux hosts running systemd. The installer has
