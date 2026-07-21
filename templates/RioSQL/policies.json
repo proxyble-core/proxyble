@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Proxyble RioSQL policy catalog. The wizard should show these policies to users and deploy the listed files in order for each selected policy.",
+  "description": "Proxyble RioSQL policy catalog. Proxyble should show these policies to users and deploy the listed files in order for each selected policy.",
   "template_root": "proxyble/templates/RioSQL",
   "always_required": [
     "00-stream-rule-queue.sql"

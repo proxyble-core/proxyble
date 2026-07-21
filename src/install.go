@@ -41,6 +41,8 @@ type installStep struct {
 	fn    func() error
 }
 
+const serviceControlTimeoutSeconds = 60
+
 // runInstall executes the selected Proxyble installation profile and records
 // each step in the action log.
 func runInstall(ctx context.Context, a *App) error {
@@ -59,21 +61,22 @@ func runInstall(ctx context.Context, a *App) error {
 	if err != nil {
 		return err
 	}
+	packageSession := &packageMetadataSession{}
 	fmt.Fprintf(a.LogFile, "[INFO] Detected platform: %s\n[INFO] OS family        : %s\n[INFO] Package manager  : %s\n", p.PrettyName, p.Family, p.PackageManager)
 	steps := []installStep{
 		{"Preparing filesystem", func() error { return prepareFilesystem(ctx, a) }},
 	}
 	if withRioDB {
 		steps = append(steps,
-			installStep{"Checking Java", func() error { return installJava(ctx, a, p) }},
+			installStep{"Checking Java", func() error { return installJava(ctx, a, p, packageSession) }},
 			installStep{"Installing RioDB", func() error { return installRioDB(ctx, a) }},
 		)
 	} else {
-		steps = append(steps, installStep{"Refreshing package metadata", func() error { return packageUpdate(ctx, p, stepOutput(a)) }})
+		steps = append(steps, installStep{"Refreshing package metadata", func() error { return packageSession.update(ctx, p, stepOutput(a)) }})
 	}
 	steps = append(steps,
-		installStep{"Installing HAProxy", func() error { return installHAProxy(ctx, a, p) }},
-		installStep{"Configuring nftables", func() error { return configureNFTables(ctx, a, p) }},
+		installStep{"Installing HAProxy", func() error { return installHAProxy(ctx, a, p, packageSession) }},
+		installStep{"Configuring nftables", func() error { return configureNFTables(ctx, a, p, packageSession) }},
 		installStep{"Configuring Proxyble Rule Agent", func() error { return configureRuleAgent(ctx, a, "") }},
 	)
 	if withRioDB {
@@ -164,9 +167,10 @@ func addRioDBAnalytics(ctx context.Context, a *App) error {
 	if err != nil {
 		return err
 	}
+	packageSession := &packageMetadataSession{}
 	steps := []installStep{
 		{"Enabling RioDB configuration", func() error { return enableRioDBConfig(a.Config) }},
-		{"Checking Java", func() error { return installJava(ctx, a, p) }},
+		{"Checking Java", func() error { return installJava(ctx, a, p, packageSession) }},
 		{"Installing RioDB", func() error { return installRioDB(ctx, a) }},
 		{"Configuring Proxyble Rule Agent", func() error { return configureRuleAgent(ctx, a, "") }},
 		{"Copying RioDB SQL templates", func() error { return syncRioDBSQL(a, "") }},
@@ -175,7 +179,7 @@ func addRioDBAnalytics(ctx context.Context, a *App) error {
 				fmt.Fprintf(stepOutput(a), "[NOTICE] HAProxy is disabled in %s; UDP log sink will be applied after listener/backend configuration is complete.\n", a.Config.Path)
 				return nil
 			}
-			return applyHAProxyIfEnabled(ctx, a, p)
+			return applyHAProxyIfEnabledWithPackageSession(ctx, a, p, packageSession)
 		}},
 	}
 	for _, step := range steps {
@@ -222,7 +226,7 @@ func prepareFilesystem(ctx context.Context, a *App) error {
 	fmt.Fprintln(out, "[INFO] Component : Proxyble Rule Agent Environment")
 	fmt.Fprintln(out, "[INFO] Purpose   : Secure directory and state initialization")
 	printHR(out, 79)
-	for _, dir := range []string{"/etc/proxyble", "/var/lib/proxyble-rule-agent", "/var/log/proxyble-rule-agent"} {
+	for _, dir := range []string{"/etc/proxyble", defaultAllowListDir, "/var/lib/proxyble-rule-agent", "/var/log/proxyble-rule-agent"} {
 		if err := mkdirOwned(dir, 0o700, "root", "root"); err != nil {
 			return err
 		}
@@ -250,6 +254,12 @@ func prepareFilesystem(ctx context.Context, a *App) error {
 		}
 		_ = chownPath(file, "root", "root")
 	}
+	if err := ensureBasicAllowListStore(); err != nil {
+		return err
+	}
+	if err := ensureEndpointAllowListStore(); err != nil {
+		return err
+	}
 	if err := mkdirAllNoSymlink("/usr/local/bin", 0o755); err != nil {
 		return err
 	}
@@ -260,6 +270,8 @@ func prepareFilesystem(ctx context.Context, a *App) error {
 	fmt.Fprintln(out, " BOOTSTRAP STATUS - VERIFIED")
 	printHR(out, 79)
 	fmt.Fprintf(out, " Input Directory   : %s   (710 root:%s)\n", defaultRuleDir, ruleInboxGroup(a.Config))
+	fmt.Fprintf(out, " Allow-list Sources: %s (600)\n", defaultBasicAllowListFile)
+	fmt.Fprintf(out, " Allow-list Batch  : %s (600)\n", defaultBasicAllowListNFTFile)
 	fmt.Fprintln(out, " State Directory   : /var/lib/proxyble-rule-agent    (700)")
 	fmt.Fprintln(out, " Log Directory     : /var/log/proxyble-rule-agent      (700)")
 	fmt.Fprintln(out, " Config File       : /etc/proxyble/config.ini (600)")
@@ -479,7 +491,7 @@ func chmodTemplateBundle(path string) error {
 
 // installJava verifies an existing Java runtime or installs the settings-selected
 // package only when this host does not already have Java available.
-func installJava(ctx context.Context, a *App, p Platform) error {
+func installJava(ctx context.Context, a *App, p Platform, packageSession *packageMetadataSession) error {
 	out := stepOutput(a)
 	javaPkg, err := a.Settings.JavaPackage(p.Family)
 	if err != nil {
@@ -512,7 +524,7 @@ func installJava(ctx context.Context, a *App, p Platform) error {
 		fmt.Fprintf(out, "[NOTICE] Existing Java runtime not usable: %s\n", existing.Detail)
 	}
 	fmt.Fprintln(out, "[INFO] Refreshing package metadata")
-	if err := packageUpdate(ctx, p, out); err != nil {
+	if err := packageSession.update(ctx, p, out); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "[PASS] Package metadata refresh step completed")
@@ -941,8 +953,8 @@ func rioDBArchiveDownloadURL(server, archiveName string) (string, error) {
 
 // installHAProxy installs HAProxy and renders/enables it only when listener and
 // backend configuration are complete.
-func installHAProxy(ctx context.Context, a *App, p Platform) error {
-	if err := installHAProxySoftware(ctx, a, p); err != nil {
+func installHAProxy(ctx context.Context, a *App, p Platform, packageSession *packageMetadataSession) error {
+	if err := installHAProxySoftware(ctx, a, p, packageSession); err != nil {
 		return err
 	}
 	if err := updateHAProxyEnabled(a.Config); err != nil {
@@ -961,13 +973,25 @@ func installHAProxy(ctx context.Context, a *App, p Platform) error {
 
 // configureNFTables installs nftables and configures its hardened systemd
 // pre-start hook to create Proxyble's managed table/chain/set.
-func configureNFTables(ctx context.Context, a *App, p Platform) error {
+func configureNFTables(ctx context.Context, a *App, p Platform, packageSession *packageMetadataSession) error {
 	out := stepOutput(a)
 	fmt.Fprintln(out, "[INFO] Starting controlled configuration session")
 	fmt.Fprintln(out, "[INFO] Component: nftables host firewall")
 	fmt.Fprintln(out, "[INFO] Ensuring nftables package is installed")
+	installedBefore, err := packageInstalled(ctx, p, defaultNFTablesPackage)
+	if err != nil {
+		return fmt.Errorf("detect existing nftables package ownership: %w", err)
+	}
+	if err := packageSession.update(ctx, p, out); err != nil {
+		return err
+	}
 	if err := packageInstall(ctx, p, out, defaultNFTablesPackage); err != nil {
 		return err
+	}
+	if !installedBefore {
+		if err := recordPackageInstalledByProxyble(a.Config, "nftables"); err != nil {
+			return fmt.Errorf("record nftables package ownership: %w", err)
+		}
 	}
 	overrideDir := "/etc/systemd/system/nftables.service.d"
 	overrideFile := filepath.Join(overrideDir, "override.conf")
@@ -1005,6 +1029,12 @@ ExecStartPre=+/usr/local/bin/proxyble --internal-nft-init
 // internalNFTInit is invoked by systemd before nftables starts to idempotently
 // create the Proxyble managed firewall structure.
 func internalNFTInit(ctx context.Context, out io.Writer) error {
+	return withNFTablesCoordinationLock(func() error {
+		return internalNFTInitLocked(ctx, out)
+	})
+}
+
+func internalNFTInitLocked(ctx context.Context, out io.Writer) error {
 	commands := [][]string{
 		{"add", "table", "inet", "pmgr"},
 		{"add", "chain", "inet", "pmgr", "managed_rules"},
@@ -1033,6 +1063,13 @@ func internalNFTInit(ctx context.Context, out io.Writer) error {
 		if err := runCommand(ctx, out, "nft", "add", "rule", "inet", "pmgr", "managed_rules", "ip", "saddr", "@blacklist", "drop"); err != nil {
 			return err
 		}
+	}
+	if cfg, err := loadConfig(defaultConfigFile); err == nil {
+		if err := applyBasicAllowListFromDiskLocked(ctx, out, cfg); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	fmt.Fprintln(out, "[PASS] nftables structure configured")
 	return nil
@@ -1300,7 +1337,7 @@ func stopServices(ctx context.Context, a *App) error {
 		if !systemctlQuiet(ctx, "cat", u.unit) {
 			continue
 		}
-		if err := timeoutCommand(ctx, out, 10, "systemctl", "stop", u.unit); err != nil {
+		if err := timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "stop", u.unit); err != nil {
 			return fmt.Errorf("failed to stop %s: %w", u.unit, err)
 		}
 		if !a.Silent {
@@ -1337,6 +1374,9 @@ func restartServices(ctx context.Context, a *App) error {
 func startRuntimeServices(ctx context.Context, a *App) error {
 	out := stepOutput(a)
 	riodbUnit := strings.TrimSuffix(riodbServiceName(a.Config), ".service")
+	_ = timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "stop", "proxyble-rule-agent.service")
+	_ = timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "stop", "proxyble-rule-agent.path")
+	_ = timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "stop", "proxyble-rule-agent.timer")
 	type runtimeUnit struct {
 		unit    string
 		label   string
@@ -1350,41 +1390,32 @@ func startRuntimeServices(ctx context.Context, a *App) error {
 	}
 	units = append(units, runtimeUnit{"haproxy", "HAProxy", "haproxy"})
 	for _, u := range units {
-		_ = timeoutCommand(ctx, out, 10, "systemctl", "stop", u.unit)
-		if u.process != "" {
-			_ = runCommand(ctx, out, "pkill", "-9", u.process)
+		startUnit := func() error {
+			return startRuntimeUnit(ctx, a, u)
 		}
-		if err := timeoutCommand(ctx, out, 10, "systemctl", "enable", u.unit); err != nil {
-			printServiceStatus(a, "Starting "+u.label, "FAILED", colorRed)
-			return fmt.Errorf("%s failed to enable: %w", u.unit, err)
+		if u.unit == "haproxy" {
+			if err := withHAProxyCoordinationLock(startUnit); err != nil {
+				return err
+			}
+			continue
 		}
-		if err := timeoutCommand(ctx, out, 10, "systemctl", "start", u.unit); err != nil {
-			printServiceStatus(a, "Starting "+u.label, "FAILED", colorRed)
-			return fmt.Errorf("%s failed to start: %w", u.unit, err)
+		if err := startUnit(); err != nil {
+			return err
 		}
-		if !systemctlQuiet(ctx, "is-active", "--quiet", u.unit) {
-			printServiceStatus(a, "Starting "+u.label, "FAILED", colorRed)
-			return fmt.Errorf("%s service failed to become active", u.unit)
-		}
-		printServiceStatus(a, "Starting "+u.label, "OK", colorBlueLight)
-		fmt.Fprintf(out, "[PASS] %s started successfully\n", u.unit)
 	}
-	_ = timeoutCommand(ctx, out, 10, "systemctl", "stop", "proxyble-rule-agent.service")
-	_ = timeoutCommand(ctx, out, 10, "systemctl", "stop", "proxyble-rule-agent.path")
-	_ = timeoutCommand(ctx, out, 10, "systemctl", "stop", "proxyble-rule-agent.timer")
-	if err := timeoutCommand(ctx, out, 10, "systemctl", "enable", "proxyble-rule-agent.path"); err != nil {
+	if err := enableRuntimeUnit(ctx, out, "proxyble-rule-agent.path"); err != nil {
 		printServiceStatus(a, "Starting Proxyble Rule Agent", "FAILED", colorRed)
 		return err
 	}
-	if err := timeoutCommand(ctx, out, 10, "systemctl", "enable", "proxyble-rule-agent.timer"); err != nil {
+	if err := enableRuntimeUnit(ctx, out, "proxyble-rule-agent.timer"); err != nil {
 		printServiceStatus(a, "Starting Proxyble Rule Agent", "FAILED", colorRed)
 		return err
 	}
-	if err := timeoutCommand(ctx, out, 10, "systemctl", "start", "proxyble-rule-agent.path"); err != nil {
+	if err := timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "start", "proxyble-rule-agent.path"); err != nil {
 		printServiceStatus(a, "Starting Proxyble Rule Agent", "FAILED", colorRed)
 		return err
 	}
-	if err := timeoutCommand(ctx, out, 10, "systemctl", "start", "proxyble-rule-agent.timer"); err != nil {
+	if err := timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "start", "proxyble-rule-agent.timer"); err != nil {
 		printServiceStatus(a, "Starting Proxyble Rule Agent", "FAILED", colorRed)
 		return err
 	}
@@ -1396,6 +1427,45 @@ func startRuntimeServices(ctx context.Context, a *App) error {
 	a.Printf("[PASS] Proxyble services started successfully.\n")
 	fmt.Fprintln(out, "[PASS] proxyble-rule-agent started successfully")
 	return nil
+}
+
+func startRuntimeUnit(ctx context.Context, a *App, u struct {
+	unit    string
+	label   string
+	process string
+}) error {
+	out := stepOutput(a)
+	_ = timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "stop", u.unit)
+	if u.process != "" {
+		_ = runCommand(ctx, out, "pkill", "-9", u.process)
+	}
+	if err := enableRuntimeUnit(ctx, out, u.unit); err != nil {
+		printServiceStatus(a, "Starting "+u.label, "FAILED", colorRed)
+		return fmt.Errorf("%s failed to enable: %w", u.unit, err)
+	}
+	if err := timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "start", u.unit); err != nil {
+		printServiceStatus(a, "Starting "+u.label, "FAILED", colorRed)
+		return fmt.Errorf("%s failed to start: %w", u.unit, err)
+	}
+	if !systemctlQuiet(ctx, "is-active", "--quiet", u.unit) {
+		printServiceStatus(a, "Starting "+u.label, "FAILED", colorRed)
+		return fmt.Errorf("%s service failed to become active", u.unit)
+	}
+	printServiceStatus(a, "Starting "+u.label, "OK", colorBlueLight)
+	fmt.Fprintf(out, "[PASS] %s started successfully\n", u.unit)
+	return nil
+}
+
+// enableRuntimeUnit avoids repeating systemd's compatibility enablement work
+// for units that are already enabled. On slower hosts that work may invoke a
+// distribution SysV helper, so a real enable operation gets the full service
+// control timeout.
+func enableRuntimeUnit(ctx context.Context, out io.Writer, unit string) error {
+	if timeoutCommand(ctx, io.Discard, serviceControlTimeoutSeconds, "systemctl", "is-enabled", "--quiet", unit) == nil {
+		fmt.Fprintf(out, "[PASS] %s already enabled\n", unit)
+		return nil
+	}
+	return timeoutCommand(ctx, out, serviceControlTimeoutSeconds, "systemctl", "enable", unit)
 }
 
 // printServiceStatus prints one aligned service-control status row and writes a

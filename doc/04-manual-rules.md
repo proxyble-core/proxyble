@@ -80,6 +80,66 @@ Expiration values can be temporary, such as `10s`, `30m`, `1h`, or `1d`.
 Leaving the interactive expiration blank creates a permanent rule. In CLI mode,
 use `--expiration none` for a permanent rule.
 
+## Allow-List
+
+Allow-list is a deny-by-default feature for the Proxyble listening port. Unlike
+the rule types below, allow-list entries do not expire and are not managed with
+the `--rules-list`, `--rules-check`, or `--rules-reset` commands.
+
+Use the interactive menu by running `sudo proxyble` and choosing `Allow-list`,
+or use one of the following CLI workflows.
+
+### Basic Allow-List
+
+Basic allow-list protects the entire Proxyble listening port. As soon as you add
+the first source, Proxyble rejects connections to that port from every IPv4
+source except the listed IP addresses and CIDR blocks. It does not restrict any
+other listening port on the server.
+
+Add allowed sources:
+
+```sh
+sudo proxyble --basic-allow-list --add 203.0.113.25
+sudo proxyble --basic-allow-list --add 198.51.100.0/24
+```
+
+Remove a source, or remove all sources:
+
+```sh
+sudo proxyble --basic-allow-list --remove 203.0.113.25 --yes
+sudo proxyble --basic-allow-list --remove-all --yes
+```
+
+Removing all Basic allow-list sources disables its default-deny behavior.
+
+### Endpoint Allow-List
+
+Endpoint allow-list is available only in HTTP and HTTPS modes. It protects
+selected HTTP path prefixes while leaving other paths open. Once a path is
+listed, requests matching that path are rejected unless the source matches an
+IP address or CIDR allowed for that path.
+
+Add a source for one or more path prefixes:
+
+```sh
+sudo proxyble --endpoint-allow-list --add 203.0.113.25 --endpoints /login /api
+sudo proxyble --endpoint-allow-list --add 198.51.100.0/24 --endpoints /private
+```
+
+Remove a source from a path, or remove all endpoint entries:
+
+```sh
+sudo proxyble --endpoint-allow-list --remove 203.0.113.25 --endpoints /login --yes
+sudo proxyble --endpoint-allow-list --remove-all --yes
+```
+
+Removing all Endpoint allow-list entries disables its default-deny behavior.
+When Basic and Endpoint allow-lists are both active, a request must pass both:
+the source must be on the Basic allow-list to reach the listener and on the
+applicable Endpoint allow-list to access a protected path.
+
+For storage details and additional context, see [Allow-List](09-allow-list.md).
+
 ## Rule Types
 
 ### `BUSY_DEFLECTION`

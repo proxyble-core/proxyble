@@ -17,7 +17,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -25,6 +27,66 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestServiceControlTimeoutIsSixtySeconds(t *testing.T) {
+	if serviceControlTimeoutSeconds != 60 {
+		t.Fatalf("service control timeout = %d seconds, want 60", serviceControlTimeoutSeconds)
+	}
+}
+
+func TestEnableRuntimeUnitSkipsEnableWhenAlreadyEnabled(t *testing.T) {
+	commandLog := installFakeSystemctl(t, true)
+	var out bytes.Buffer
+
+	if err := enableRuntimeUnit(context.Background(), &out, "haproxy"); err != nil {
+		t.Fatalf("enableRuntimeUnit returned error: %v", err)
+	}
+
+	commands := readTestFile(t, commandLog)
+	if commands != "is-enabled --quiet haproxy\n" {
+		t.Fatalf("systemctl commands = %q, want only the enabled-state probe", commands)
+	}
+	if !strings.Contains(out.String(), "haproxy already enabled") {
+		t.Fatalf("enableRuntimeUnit output missing already-enabled result: %q", out.String())
+	}
+}
+
+func TestEnableRuntimeUnitEnablesDisabledUnit(t *testing.T) {
+	commandLog := installFakeSystemctl(t, false)
+	var out bytes.Buffer
+
+	if err := enableRuntimeUnit(context.Background(), &out, "haproxy"); err != nil {
+		t.Fatalf("enableRuntimeUnit returned error: %v", err)
+	}
+
+	commands := readTestFile(t, commandLog)
+	want := "is-enabled --quiet haproxy\nenable haproxy\n"
+	if commands != want {
+		t.Fatalf("systemctl commands = %q, want %q", commands, want)
+	}
+}
+
+func installFakeSystemctl(t *testing.T, enabled bool) string {
+	t.Helper()
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "systemctl.log")
+	enabledExit := 1
+	if enabled {
+		enabledExit = 0
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %s
+if [ "$1" = "is-enabled" ]; then
+    exit %d
+fi
+exit 0
+`, commandLog, enabledExit)
+	if err := os.WriteFile(filepath.Join(binDir, "systemctl"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	return commandLog
+}
 
 func TestSyncRioDBSQLCopiesMandatoryTemplateOnly(t *testing.T) {
 	app, sqlDir := testRioDBSQLApp(t, true)

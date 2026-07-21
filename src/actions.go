@@ -1734,26 +1734,11 @@ func uninstallProxyble(ctx context.Context, a *App, args []string) error {
 		_ = systemctl(ctx, stepOutput(a), "reset-failed")
 		return nil
 	})
-	step("Removing packages", func() error {
-		for _, pkg := range haproxyRemovalPackages(p) {
-			_ = packageRemove(ctx, p, stepOutput(a), pkg)
-		}
-		_ = packageRemove(ctx, p, stepOutput(a), defaultNFTablesPackage)
-		if removeJava {
-			javaPkg, err := a.Settings.JavaPackage(p.Family)
-			if err == nil {
-				_ = packageRemove(ctx, p, stepOutput(a), javaPkg.Package)
-			}
-		} else if riodbWasInstalled && !javaCanBeRemoved {
-			fmt.Fprintln(stepOutput(a), "[NOTICE] Java package removal skipped; no supported Java package was detected on this host.")
-		} else if riodbWasInstalled {
-			fmt.Fprintln(stepOutput(a), "[NOTICE] Java package removal skipped by operator choice.")
-		}
-		if p.Family == platformFamilyDebian {
-			_ = runCommand(ctx, stepOutput(a), "apt-get", "autoremove", "-y")
-		}
-		return nil
-	})
+	if err := runStep(a, "Removing packages", func() error {
+		return removeProxyblePackages(ctx, a, p, removeJava, riodbWasInstalled, javaCanBeRemoved)
+	}); err != nil {
+		return fmt.Errorf("package teardown incomplete; Proxyble executable and configuration were preserved for retry: %w", err)
+	}
 	step("Removing files and state", func() error {
 		riodbInstallRoot := riodbInstallDir(a.Config)
 		paths := []string{
@@ -1790,6 +1775,47 @@ func uninstallProxyble(ctx context.Context, a *App, args []string) error {
 		return exitError{code: failures}
 	}
 	a.Printf("Full log: %s\n", a.LogPath)
+	return nil
+}
+
+func removeProxyblePackages(ctx context.Context, a *App, p Platform, removeJava, riodbWasInstalled, javaCanBeRemoved bool) error {
+	out := stepOutput(a)
+	removedPackage := false
+	if packageInstalledByProxyble(a.Config, "haproxy") {
+		if err := packageRemove(ctx, p, out, defaultHAProxyPackage); err != nil {
+			return fmt.Errorf("remove HAProxy package: %w", err)
+		}
+		removedPackage = true
+	} else {
+		fmt.Fprintln(out, "[NOTICE] HAProxy package preserved; Proxyble did not install it or ownership is unknown.")
+	}
+	if packageInstalledByProxyble(a.Config, "nftables") {
+		if err := packageRemove(ctx, p, out, defaultNFTablesPackage); err != nil {
+			return fmt.Errorf("remove nftables package: %w", err)
+		}
+		removedPackage = true
+	} else {
+		fmt.Fprintln(out, "[NOTICE] nftables package preserved; Proxyble did not install it or ownership is unknown.")
+	}
+	if removeJava {
+		javaPkg, err := a.Settings.JavaPackage(p.Family)
+		if err != nil {
+			return fmt.Errorf("resolve Java package for removal: %w", err)
+		}
+		if err := packageRemove(ctx, p, out, javaPkg.Package); err != nil {
+			return fmt.Errorf("remove Java package: %w", err)
+		}
+		removedPackage = true
+	} else if riodbWasInstalled && !javaCanBeRemoved {
+		fmt.Fprintln(out, "[NOTICE] Java package removal skipped; no supported Java package was detected on this host.")
+	} else if riodbWasInstalled {
+		fmt.Fprintln(out, "[NOTICE] Java package removal skipped by operator choice.")
+	}
+	if p.Family == platformFamilyDebian && removedPackage {
+		if err := runPackageCommandEnv(ctx, out, aptNonInteractiveEnv(), "apt-get", aptCommandArgs("autoremove", "-y")...); err != nil {
+			return fmt.Errorf("remove unused package dependencies: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -1859,22 +1885,8 @@ func javaRemovalCandidate(ctx context.Context, a *App, p Platform) bool {
 }
 
 func knownPackageInstalled(ctx context.Context, p Platform, pkg string) bool {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	pkg = strings.TrimSpace(pkg)
-	if pkg == "" {
-		return false
-	}
-	switch p.Family {
-	case platformFamilyDebian:
-		out, err := exec.CommandContext(ctx, "dpkg-query", "-W", "-f=${Status}", pkg).Output()
-		return err == nil && strings.Contains(string(out), "install ok installed")
-	case platformFamilyAmazon, platformFamilyAzure, platformFamilyRHEL:
-		return exec.CommandContext(ctx, "rpm", "-q", pkg).Run() == nil
-	default:
-		return false
-	}
+	installed, err := packageInstalled(ctx, p, pkg)
+	return err == nil && installed
 }
 
 // exitError lets actions request a specific process exit code without losing the

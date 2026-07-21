@@ -73,6 +73,50 @@ func TestParseGlobalArgsRestartAliasMapsToStart(t *testing.T) {
 	}
 }
 
+func TestParseGlobalArgsBasicAllowListAction(t *testing.T) {
+	app, help, err := parseGlobalArgs([]string{"--basic-allow-list", "--remove", "127.0.0.1", "--yes"})
+	if err != nil {
+		t.Fatalf("parseGlobalArgs returned error: %v", err)
+	}
+	if help {
+		t.Fatalf("help should be false")
+	}
+	if !app.CommandLine {
+		t.Fatalf("--basic-allow-list should force command-line mode")
+	}
+	if app.Action != "--basic-allow-list" {
+		t.Fatalf("action = %q, want --basic-allow-list", app.Action)
+	}
+	if got, want := strings.Join(app.Args, ","), "--remove,127.0.0.1"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if !app.AssumeYes {
+		t.Fatalf("--yes after --basic-allow-list should set AssumeYes")
+	}
+}
+
+func TestParseGlobalArgsEndpointAllowListAction(t *testing.T) {
+	app, help, err := parseGlobalArgs([]string{"--endpoint-allow-list", "--remove", "127.0.0.1", "--endpoints", "/api", "--yes"})
+	if err != nil {
+		t.Fatalf("parseGlobalArgs returned error: %v", err)
+	}
+	if help {
+		t.Fatalf("help should be false")
+	}
+	if !app.CommandLine {
+		t.Fatalf("--endpoint-allow-list should force command-line mode")
+	}
+	if app.Action != "--endpoint-allow-list" {
+		t.Fatalf("action = %q, want --endpoint-allow-list", app.Action)
+	}
+	if got, want := strings.Join(app.Args, ","), "--remove,127.0.0.1,--endpoints,/api"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if !app.AssumeYes {
+		t.Fatalf("--yes after --endpoint-allow-list should set AssumeYes")
+	}
+}
+
 func TestCLIInstallGateMatchesWizardHiddenAreas(t *testing.T) {
 	blocked := []string{
 		"--config-listener",
@@ -88,6 +132,8 @@ func TestCLIInstallGateMatchesWizardHiddenAreas(t *testing.T) {
 		"--policies-edit",
 		"--rules-list",
 		"--rules-add",
+		"--basic-allow-list",
+		"--endpoint-allow-list",
 	}
 	for _, action := range blocked {
 		if !cliActionRequiresInstalledSoftware(action) {
@@ -348,6 +394,66 @@ func TestMainMenuHidesRuntimeAreasUntilRuntimeConfigComplete(t *testing.T) {
 	if hasMenuTag(items, "policies") || hasMenuTag(items, "rules") {
 		t.Fatalf("policies/rules should wait until listener and backend are complete: %#v", items)
 	}
+	if !hasMenuTag(items, "allow-list") {
+		t.Fatalf("allow-list should be visible once the listener is configured: %#v", items)
+	}
+}
+
+func TestMainMenuHidesAllowListUntilListenerConfigured(t *testing.T) {
+	cfg := &Config{Data: map[string]map[string]string{
+		"traffic": {"mode": "tcp"},
+		"haproxy": {
+			"timeout": "60s",
+		},
+	}}
+	items := mainMenuItems(cfg, false)
+	if hasMenuTag(items, "allow-list") {
+		t.Fatalf("allow-list should wait until listener config is complete: %#v", items)
+	}
+}
+
+func TestMainMenuOrdersManagementAreas(t *testing.T) {
+	cfg := completeRuntimeConfig()
+	cfg.Data["riodb"] = map[string]string{"enabled": "true"}
+	items := mainMenuItems(cfg, false)
+	want := []string{"installation", "config", "allow-list", "rules", "policies", "exit"}
+	if len(items) != len(want) {
+		t.Fatalf("main menu length = %d, want %d: %#v", len(items), len(want), items)
+	}
+	for i, tag := range want {
+		if got := menuChoiceTag(items[i][0]); got != tag {
+			t.Fatalf("main menu item %d = %q, want %q: %#v", i, got, tag, items)
+		}
+	}
+	allowListIndex := menuTagIndex(items, "allow-list")
+	if !strings.Contains(items[allowListIndex][1], "Deny by default") {
+		t.Fatalf("allow-list description should explain deny-by-default behavior: %#v", items[allowListIndex])
+	}
+}
+
+func TestMainMenuOrdersCoreManagementAreas(t *testing.T) {
+	items := mainMenuItems(completeRuntimeConfig(), false)
+	want := []string{"installation", "config", "allow-list", "rules", "exit"}
+	if len(items) != len(want) {
+		t.Fatalf("core main menu length = %d, want %d: %#v", len(items), len(want), items)
+	}
+	for i, tag := range want {
+		if got := menuChoiceTag(items[i][0]); got != tag {
+			t.Fatalf("core main menu item %d = %q, want %q: %#v", i, got, tag, items)
+		}
+	}
+}
+
+func TestMainMenuPlacesAllowListBeforeRules(t *testing.T) {
+	items := mainMenuItems(completeRuntimeConfig(), false)
+	rulesIndex := menuTagIndex(items, "rules")
+	allowListIndex := menuTagIndex(items, "allow-list")
+	if rulesIndex < 0 || allowListIndex < 0 {
+		t.Fatalf("main menu missing allow-list/rules: %#v", items)
+	}
+	if allowListIndex >= rulesIndex {
+		t.Fatalf("allow-list should appear before rules: %#v", items)
+	}
 }
 
 func TestMainMenuHidesPoliciesWhenRioDBDisabled(t *testing.T) {
@@ -363,6 +469,27 @@ func TestMainMenuHidesPoliciesWhenRioDBDisabled(t *testing.T) {
 	items = mainMenuItems(cfg, false)
 	if !hasMenuTag(items, "policies") || !hasMenuTag(items, "rules") {
 		t.Fatalf("policies and rules should be visible with RioDB enabled: %#v", items)
+	}
+}
+
+func TestAllowListMenuHidesEndpointForTCP(t *testing.T) {
+	items := allowListMenuItems(completeRuntimeConfig())
+	if !hasMenuTag(items, "basic") || !hasMenuTag(items, "back") {
+		t.Fatalf("allow-list menu missing basic/back options: %#v", items)
+	}
+	if hasMenuTag(items, "endpoint") {
+		t.Fatalf("endpoint allow-list should be hidden for TCP mode: %#v", items)
+	}
+}
+
+func TestAllowListMenuShowsEndpointForHTTPAndHTTPS(t *testing.T) {
+	for _, mode := range []string{"http", "https"} {
+		cfg := completeRuntimeConfig()
+		cfg.Data["traffic"]["mode"] = mode
+		items := allowListMenuItems(cfg)
+		if !hasMenuTag(items, "endpoint") {
+			t.Fatalf("endpoint allow-list should be shown for %s mode: %#v", mode, items)
+		}
 	}
 }
 
@@ -398,6 +525,16 @@ func hasMenuTag(items [][2]string, tag string) bool {
 		}
 	}
 	return false
+}
+
+func menuTagIndex(items [][2]string, tag string) int {
+	want := menuChoiceTag(tag)
+	for i, item := range items {
+		if menuChoiceTag(item[0]) == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func hasString(values []string, target string) bool {

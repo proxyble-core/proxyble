@@ -22,6 +22,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,11 +157,73 @@ func TestAPTNonInteractiveEnvironment(t *testing.T) {
 	}
 }
 
-func TestAPTCommandArgsDisableDpkgPTY(t *testing.T) {
-	got := aptCommandArgs("install", "-y", "haproxy-awslc")
-	want := []string{"-o", "Dpkg::Use-Pty=0", "install", "-y", "haproxy-awslc"}
+func TestAPTCommandArgsDisableDpkgPTYAndWaitForLock(t *testing.T) {
+	got := aptCommandArgs("install", "-y", "haproxy")
+	want := []string{"-o", "Dpkg::Use-Pty=0", "-o", "DPkg::Lock::Timeout=120", "install", "-y", "haproxy"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("aptCommandArgs = %#v, want %#v", got, want)
+	}
+}
+
+func TestDNFPackageCommandsWaitForLock(t *testing.T) {
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "dnf.log")
+	dnfScript := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %q\n", commandLog)
+	if err := os.WriteFile(filepath.Join(binDir, "dnf"), []byte(dnfScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	p := Platform{Family: platformFamilyRHEL, PackageManager: "dnf"}
+	if err := packageInstall(context.Background(), p, &strings.Builder{}, "haproxy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := packageRemove(context.Background(), p, &strings.Builder{}, "haproxy"); err != nil {
+		t.Fatal(err)
+	}
+	commands, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(commands), "--setopt=exit_on_lock=False"); got != 2 {
+		t.Fatalf("DNF lock-wait option count = %d, want 2; commands:\n%s", got, commands)
+	}
+}
+
+func TestPackageInstalledPropagatesPackageDatabaseFailure(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "dpkg-query"), []byte("#!/bin/sh\nexit 2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	installed, err := packageInstalled(context.Background(), Platform{Family: platformFamilyDebian}, "haproxy")
+	if err == nil {
+		t.Fatalf("package database failure returned installed=%v without an error", installed)
+	}
+}
+
+func TestPackageMetadataSessionRefreshesOnlyOnce(t *testing.T) {
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "apt-get.log")
+	aptScript := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %q\n", commandLog)
+	if err := os.WriteFile(filepath.Join(binDir, "apt-get"), []byte(aptScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	session := &packageMetadataSession{}
+	p := Platform{PackageManager: "apt-get"}
+	for i := 0; i < 2; i++ {
+		if err := session.update(context.Background(), p, &strings.Builder{}); err != nil {
+			t.Fatalf("package metadata refresh %d failed: %v", i+1, err)
+		}
+	}
+
+	commands, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(commands), "update"); got != 1 {
+		t.Fatalf("apt-get update count = %d, want 1; commands:\n%s", got, commands)
 	}
 }
 

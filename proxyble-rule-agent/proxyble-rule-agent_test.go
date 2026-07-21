@@ -326,6 +326,26 @@ func TestBuildHAProxyPayload(t *testing.T) {
 	mustNotContain(t, payload, ";")
 }
 
+func TestBuildHAProxyMapBodies(t *testing.T) {
+	state := State{Rules: map[string]Rule{
+		"192.0.2.20/32": {IP: "192.0.2.20/32", Action: ActionLimitBandwidth, System: SystemHAProxy, Parameter: "15mb"},
+		"192.0.2.0/24":  {IP: "192.0.2.0/24", Action: ActionTimeout, System: SystemHAProxy, Parameter: "5s"},
+		"192.0.2.24/32": {IP: "192.0.2.24/32", Action: ActionDrop, System: SystemNFTables},
+		"192.0.2.25":    {IP: "192.0.2.25", Action: ActionLimitEndpoint, System: SystemHAProxy, Parameter: "10/second", Endpoints: []string{"/api/export", "/login"}, EndpointRateLimit: 100},
+	}}
+
+	bodies := buildHAProxyMapBodies(state)
+	mustContain(t, bodies.rules, "192.0.2.20/32 BW_LIM")
+	mustContain(t, bodies.rules, "192.0.2.0/24 T_OUT")
+	mustContain(t, bodies.rules, "192.0.2.25 ENDPOINT_RATE")
+	mustContain(t, bodies.params, "192.0.2.20/32 15mb")
+	mustContain(t, bodies.params, "192.0.2.0/24 5s")
+	mustContain(t, bodies.params, "192.0.2.25 10/second")
+	mustContain(t, bodies.endpointRates, "192.0.2.25|/api/export 100")
+	mustContain(t, bodies.endpointRates, "192.0.2.25|/login 100")
+	mustNotContain(t, bodies.rules, "192.0.2.24")
+}
+
 func TestEndpointRateIsHTTPOnly(t *testing.T) {
 	p := Rule{Action: ActionLimitEndpoint, System: SystemHAProxy}
 	if !shouldSkipRuleForMode(p, "tcp") {

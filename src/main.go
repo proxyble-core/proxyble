@@ -65,6 +65,8 @@ var actionAliases = map[string]string{
 	"--rules-add":              "--rules-add",
 	"--rules-check":            "--rules-check",
 	"--rules-reset":            "--rules-reset",
+	"--basic-allow-list":       "--basic-allow-list",
+	"--endpoint-allow-list":    "--endpoint-allow-list",
 	"--internal-nft-init":      "--internal-nft-init",
 }
 
@@ -174,7 +176,10 @@ func parseGlobalArgs(args []string) (*App, bool, error) {
 			app.Args = append(app.Args, args[i+1:]...)
 			i = len(args)
 		default:
-			if normalized, ok := actionAliases[arg]; ok {
+			if isAllowListCLIAction(app.Action) {
+				app.CommandLine = true
+				app.Args = append(app.Args, arg)
+			} else if normalized, ok := actionAliases[arg]; ok {
 				app.CommandLine = true
 				if app.Action != "" {
 					return nil, false, fmt.Errorf("[ERROR] Only one action can be selected at a time: %s and %s", app.Action, arg)
@@ -343,6 +348,18 @@ func runCLIAction(ctx context.Context, a *App) error {
 		}
 		defer a.CloseLog()
 		return resetRules(ctx, a, a.Args)
+	case "--basic-allow-list":
+		if err := a.PrepareLog("[proxyble] Allow-list -> Basic"); err != nil {
+			return err
+		}
+		defer a.CloseLog()
+		return basicAllowListCLI(ctx, a, a.Args)
+	case "--endpoint-allow-list":
+		if err := a.PrepareLog("[proxyble] Allow-list -> Endpoint"); err != nil {
+			return err
+		}
+		defer a.CloseLog()
+		return endpointAllowListCLI(ctx, a, a.Args)
 	default:
 		return fmt.Errorf("no CLI action selected")
 	}
@@ -564,7 +581,11 @@ func confirmInstallLicense(a *App, notice javaNoticeOptions) (bool, error) {
 // cliActionRequiresInstalledSoftware matches command-line areas hidden by the
 // wizard until Proxyble has been installed.
 func cliActionRequiresInstalledSoftware(action string) bool {
-	return action == "--installation-add-riodb" || strings.HasPrefix(action, "--config-") || strings.HasPrefix(action, "--policies-") || strings.HasPrefix(action, "--rules-")
+	return action == "--installation-add-riodb" || isAllowListCLIAction(action) || strings.HasPrefix(action, "--config-") || strings.HasPrefix(action, "--policies-") || strings.HasPrefix(action, "--rules-")
+}
+
+func isAllowListCLIAction(action string) bool {
+	return action == "--basic-allow-list" || action == "--endpoint-allow-list"
 }
 
 func cliActionRequiresRioDB(action string) bool {
@@ -640,6 +661,10 @@ func runInteractive(ctx context.Context, a *App) error {
 			if err := runRulesMenu(ctx, a); err != nil {
 				return err
 			}
+		case "allow-list":
+			if err := runAllowListMenu(ctx, a); err != nil {
+				return err
+			}
 		case "exit":
 			return nil
 		}
@@ -681,11 +706,14 @@ func mainMenuItems(c *Config, servicesNeedStart bool) [][2]string {
 		{"installation", "Install and remove software"},
 		{configTag, "Configure and control Proxyble services"},
 	}
+	if haproxyListenerComplete(c) {
+		items = append(items, [2]string{"allow-list", "Deny by default, allowing only specific sources"})
+	}
 	if runtimeConfigComplete(c) {
+		items = append(items, [2]string{"rules", "Manually add or remove enforcement rules"})
 		if riodbEnabled(c) {
 			items = append(items, [2]string{"policies", "Detect threats with real-time analytics"})
 		}
-		items = append(items, [2]string{"rules", "Manually add or remove enforcement rules"})
 	}
 	items = append(items, [2]string{"exit", "Exit this wizard"})
 	return items
@@ -1045,6 +1073,9 @@ Actions:
   --rules-add               Add a manual rule.
   --rules-check             Check an IP and optionally remove a matching rule.
   --rules-reset             Reset active rules by type or all rules.
+
+  --basic-allow-list        Add or remove Basic allow-list sources.
+  --endpoint-allow-list     Add or remove endpoint allow-list source/path entries.
 `)
 }
 
@@ -1076,6 +1107,10 @@ func printActionHelp(action string) {
 		fmt.Println("Usage: proxyble --rules-check --ip IP [--remove] [selector flags] [global flags]")
 	case "--rules-reset":
 		fmt.Println("Usage: proxyble --rules-reset --type ALL|RULE_TYPE [global flags]")
+	case "--basic-allow-list":
+		fmt.Println("Usage: proxyble --basic-allow-list --add SOURCE | --remove SOURCE | --remove-all [--yes] [global flags]")
+	case "--endpoint-allow-list":
+		fmt.Println("Usage: proxyble --endpoint-allow-list --add SOURCE --endpoints PATH [PATH...] | --remove SOURCE --endpoints PATH [PATH...] | --remove-all [--yes] [global flags]")
 	default:
 		printGlobalHelp()
 	}

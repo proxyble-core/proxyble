@@ -89,6 +89,7 @@ metrics_log_layers=request-completion
 
 [haproxy]
 enabled=false
+installed_by_proxyble=false
 listener_port=
 timeout=60s
 certificate_path=
@@ -102,6 +103,7 @@ chroot_dir=/var/lib/haproxy
 
 [nftables]
 enabled=true
+installed_by_proxyble=false
 table_family=inet
 table_name=pmgr
 managed_chain=managed_rules
@@ -327,6 +329,20 @@ func riodbEnabled(c *Config) bool {
 // Java removal when a supported Java package is present.
 func javaInstalledByProxyble(c *Config) bool {
 	return configIsTrue(c.Get("java", "installed_by_proxyble", "false"))
+}
+
+// packageInstalledByProxyble reports whether Proxyble recorded ownership of a
+// package it may otherwise share with software configured before installation.
+// Missing markers are deliberately treated as false for migration safety.
+func packageInstalledByProxyble(c *Config, section string) bool {
+	return configIsTrue(c.Get(section, "installed_by_proxyble", "false"))
+}
+
+func recordPackageInstalledByProxyble(c *Config, section string) error {
+	if c == nil {
+		return fmt.Errorf("cannot record %s package ownership without configuration", section)
+	}
+	return c.Set(section, "installed_by_proxyble", "true")
 }
 
 // configuredRioDBUDPPort returns a RioDB UDP listener port from config.ini.

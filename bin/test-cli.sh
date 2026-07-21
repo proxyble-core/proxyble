@@ -26,6 +26,10 @@ BACKEND_HOST="${PROXYBLE_BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${PROXYBLE_BACKEND_PORT:-18081}"
 TIMEOUT="${PROXYBLE_TIMEOUT:-60s}"
 RULE_BATCH_WAIT="${PROXYBLE_RULE_BATCH_WAIT:-6}"
+BASIC_ALLOW_LIST_DIR="/etc/proxyble/allow-list"
+BASIC_ALLOW_LIST_FILE="$BASIC_ALLOW_LIST_DIR/basic.sources"
+BASIC_ALLOW_LIST_NFT_FILE="$BASIC_ALLOW_LIST_DIR/basic.nft"
+ENDPOINT_ALLOW_LIST_FILE="$BASIC_ALLOW_LIST_DIR/endpoint.sources"
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
     printf '[ERROR] Proxyble CLI regression must run as root.\n' >&2
@@ -67,6 +71,27 @@ run_ok() {
 
 run_proxyble() {
     run_ok "$1" "${SUDO[@]}" "$PROXYBLE_BIN" "${@:2}"
+}
+
+basic_allow_list_missing() {
+    local source="$1"
+    if [[ ! -e "$BASIC_ALLOW_LIST_FILE" ]]; then
+        return 0
+    fi
+    ! grep -Fxq "$source" "$BASIC_ALLOW_LIST_FILE"
+}
+
+endpoint_allow_list_missing() {
+    local source="$1"
+    local endpoint="$2"
+    if [[ ! -e "$ENDPOINT_ALLOW_LIST_FILE" ]]; then
+        return 0
+    fi
+    ! grep -Fxq "$source $endpoint" "$ENDPOINT_ALLOW_LIST_FILE"
+}
+
+haproxy_endpoint_allow_list_absent() {
+    ! grep -Fq "proxyble_endpoint_allow" /etc/haproxy/haproxy.cfg
 }
 
 teardown() {
@@ -128,6 +153,17 @@ run_proxyble "config backend" --config-backend --yes \
     --no-secondary \
     --no-start || exit 1
 
+print_header "Basic allow-list commands"
+run_proxyble "basic allow-list add localhost" --basic-allow-list --add 127.0.0.1 || exit 1
+run_ok "basic allow-list contains localhost" "${SUDO[@]}" grep -Fxq 127.0.0.1 "$BASIC_ALLOW_LIST_FILE" || exit 1
+run_proxyble "basic allow-list add CIDR" --basic-allow-list --add 10.10.10.10/24 || exit 1
+run_ok "basic allow-list normalizes CIDR" "${SUDO[@]}" grep -Fxq 10.10.10.0/24 "$BASIC_ALLOW_LIST_FILE" || exit 1
+run_ok "basic allow-list nft batch exists" "${SUDO[@]}" test -s "$BASIC_ALLOW_LIST_NFT_FILE" || exit 1
+run_proxyble "basic allow-list remove localhost" --basic-allow-list --remove 127.0.0.1 --yes || exit 1
+run_ok "basic allow-list localhost removed" basic_allow_list_missing 127.0.0.1 || exit 1
+run_proxyble "basic allow-list remove all" --basic-allow-list --remove-all --yes || exit 1
+run_ok "basic allow-list source file empty" "${SUDO[@]}" test ! -s "$BASIC_ALLOW_LIST_FILE" || exit 1
+
 print_header "Policy commands"
 run_proxyble "policies list initially" --policies-list || exit 1
 run_proxyble "policies deploy tcp-compatible" --policies-deploy \
@@ -155,6 +191,26 @@ run_proxyble "policies remove http-only" --policies-remove --yes \
 
 run_proxyble "config restart" --config-restart --yes || exit 1
 run_proxyble "config status" --config-status || exit 1
+
+print_header "Endpoint allow-list commands"
+run_proxyble "endpoint allow-list add localhost endpoints" --endpoint-allow-list \
+    --add 127.0.0.1 \
+    --endpoints /login /api || exit 1
+run_ok "endpoint allow-list contains localhost /login" "${SUDO[@]}" grep -Fxq "127.0.0.1 /login" "$ENDPOINT_ALLOW_LIST_FILE" || exit 1
+run_ok "endpoint allow-list contains localhost /api" "${SUDO[@]}" grep -Fxq "127.0.0.1 /api" "$ENDPOINT_ALLOW_LIST_FILE" || exit 1
+run_proxyble "endpoint allow-list add CIDR endpoint" --endpoint-allow-list \
+    --add 10.10.20.10/24 \
+    --endpoints /private || exit 1
+run_ok "endpoint allow-list normalizes CIDR" "${SUDO[@]}" grep -Fxq "10.10.20.0/24 /private" "$ENDPOINT_ALLOW_LIST_FILE" || exit 1
+run_ok "haproxy endpoint allow-list rendered" "${SUDO[@]}" grep -Fq "proxyble_endpoint_allow" /etc/haproxy/haproxy.cfg || exit 1
+run_proxyble "endpoint allow-list remove localhost /login" --endpoint-allow-list \
+    --remove 127.0.0.1 \
+    --endpoints /login \
+    --yes || exit 1
+run_ok "endpoint allow-list localhost /login removed" endpoint_allow_list_missing 127.0.0.1 /login || exit 1
+run_proxyble "endpoint allow-list remove all" --endpoint-allow-list --remove-all --yes || exit 1
+run_ok "endpoint allow-list source file empty" "${SUDO[@]}" test ! -s "$ENDPOINT_ALLOW_LIST_FILE" || exit 1
+run_ok "haproxy endpoint allow-list disabled" haproxy_endpoint_allow_list_absent || exit 1
 
 print_header "Rule commands"
 run_proxyble "rules list" --rules-list || exit 1
