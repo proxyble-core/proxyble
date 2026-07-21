@@ -86,7 +86,7 @@ code, package validation, and release tests.
 ## `templates/`
 
 `templates/RioSQL/` contains deployable RioSQL policy templates and shared
-window/query dependencies used by the Policies wizard and policy CLI actions.
+window/query dependencies used by the Policies UI and policy CLI actions.
 The installer copies this tree to `/opt/proxyble/templates/` so installed
 systems can deploy policies without the source tree.
 
@@ -179,6 +179,39 @@ the engine needs.
 Do not move the handoff back to `/tmp` or `/var/tmp`. The default spool path is
 part of the security model.
 
+## Allow-List Runtime Paths
+
+Allow-list state is stored separately from rule-agent state because it is managed
+by the Proxyble management binary, not by `proxyble-rule-agent`.
+
+| Path | Purpose |
+| --- | --- |
+| `/etc/proxyble/allow-list` | Root-only allow-list directory. |
+| `/etc/proxyble/allow-list/basic.sources` | Basic allow-list source file, one IPv4 address or CIDR per line. |
+| `/etc/proxyble/allow-list/basic.nft` | Rendered Basic nftables batch applied with `nft -f`. |
+| `/etc/proxyble/allow-list/endpoint.sources` | Endpoint allow-list source file, one IPv4 address/CIDR and endpoint path per line. |
+
+Default ownership and mode:
+
+```text
+/etc/proxyble/allow-list                root:root 0700
+/etc/proxyble/allow-list/basic.sources  root:root 0600
+/etc/proxyble/allow-list/basic.nft      root:root 0600
+/etc/proxyble/allow-list/endpoint.sources root:root 0600
+```
+
+When `basic.sources` has entries, Proxyble applies a dedicated
+`inet proxyble_allowlist` nftables table that rejects traffic to the configured
+Proxyble listening port unless the source is listed. Emptying `basic.sources`
+removes that table and disables Basic default-deny behavior.
+
+When `endpoint.sources` has entries, Proxyble renders HAProxy endpoint ACLs for
+HTTP/HTTPS modes and reloads HAProxy under the shared HAProxy lock. Requests
+matching a listed endpoint path prefix are denied unless the source matches one
+of that endpoint's allowed IPv4 addresses or CIDR blocks. Emptying
+`endpoint.sources` removes those ACLs and disables endpoint default-deny
+behavior.
+
 Core installs keep `riodb.enabled=false`, do not install Java/RioDB, do not
 start `riodb.service`, and hide the Policies menu. Adding RioDB later sets
 `riodb.enabled=true`, installs RioDB, installs Java only when no working Java
@@ -199,6 +232,7 @@ logs a notice and skips Java package removal.
 | `/etc/haproxy/maps/rules.map` | Source-to-action map. |
 | `/etc/haproxy/maps/params.map` | Source-to-parameter map. |
 | `/etc/haproxy/maps/endpoint-rates.map` | Endpoint-rate map. |
+| `/etc/proxyble/allow-list/endpoint.sources` | Source data used to render HAProxy endpoint allow-list ACLs. |
 | `/run/haproxy` | HAProxy runtime directory. |
 | `/run/haproxy/admin.sock` | HAProxy Runtime API socket. |
 | `/var/lib/haproxy` | HAProxy chroot directory. |
@@ -251,6 +285,10 @@ hook exist when nftables starts.
 - Keep `bin/riodb-settings.json` as the release settings file.
 - Keep `/etc/proxyble/config.ini` as the canonical installed configuration.
 - Keep `/var/spool/proxyble/rules/inbox.tmp` as the default rule-agent handoff.
+- Keep `/etc/proxyble/allow-list/basic.sources` as the Basic allow-list source
+  file.
+- Keep `/etc/proxyble/allow-list/endpoint.sources` as the Endpoint allow-list
+  source file.
 - Do not change installed path defaults without updating this layout reference,
-  `config.go`, installer tests, `bin/stage.sh`, `bin/package.sh`, and
-  deployment documentation together.
+  `config.go` or `allowlist.go`, installer tests, `bin/stage.sh`,
+  `bin/package.sh`, and deployment documentation together.

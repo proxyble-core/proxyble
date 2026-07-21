@@ -43,6 +43,11 @@ if [[ ! -f "$RIODB_SETTINGS" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$SOURCE_GO_DIR/allowlist.go" ]]; then
+    echo "[ERROR] Missing allow-list source file: $SOURCE_GO_DIR/allowlist.go" >&2
+    exit 1
+fi
+
 if [[ ! -d "$SOURCE_APP_DIR/templates/RioSQL/policies" ]]; then
     echo "[ERROR] Missing RioSQL policy templates: $SOURCE_APP_DIR/templates/RioSQL/policies" >&2
     exit 1

@@ -17,6 +17,9 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,6 +78,9 @@ func TestBuildHAProxyConfigUsesHTTPLogFormatWhenRioDBEnabled(t *testing.T) {
 		"log 127.0.0.1:2445 format raw local0",
 		"option  httplog",
 		`log-format '{"schema":"proxyble_http_request_completion_v1"`,
+		`"accept_ts_ms":%Ts%ms`,
+		`"request_ts_ms":%[var(txn.request_ts_ms)]`,
+		"http-request set-var(txn.request_ts_ms) date(0,ms)",
 		`"method":"%[var(txn.method),json(utf8s)]"`,
 		`"path":"%[var(txn.path),json(utf8s)]"`,
 		`"status_code":%ST`,
@@ -91,6 +97,11 @@ func TestBuildHAProxyConfigUsesHTTPLogFormatWhenRioDBEnabled(t *testing.T) {
 	if strings.Contains(haproxyCompletionLogFormat("http"), "res.fhdr(") {
 		t.Fatalf("HTTP completion log-format should use captured txn vars, not direct response-header fetches")
 	}
+	for _, unsupported := range []string{"accept_date(ms)", "request_date(ms)"} {
+		if strings.Contains(body, unsupported) {
+			t.Fatalf("HTTP HAProxy config should not require HAProxy 3.0 timestamp fetch %q\n%s", unsupported, body)
+		}
+	}
 	if strings.Contains(body, `"schema":"proxyble_tcp`) {
 		t.Fatalf("HTTP mode should not render TCP schemas\n%s", body)
 	}
@@ -101,13 +112,13 @@ func TestBuildHAProxyHTTPConfigPassesHAProxySyntaxWhenAvailable(t *testing.T) {
 	if err != nil {
 		t.Skip("haproxy binary is not installed")
 	}
-	versionOut, err := exec.Command(haproxy, "-v").CombinedOutput()
-	if err != nil {
-		t.Skipf("haproxy -v failed: %v", err)
-	}
-	versionLine := strings.SplitN(strings.TrimSpace(string(versionOut)), "\n", 2)[0]
-	if branch := haproxyVersionBranch(versionLine); branch != haproxyRequiredBranch {
-		t.Skipf("haproxy branch %q installed; syntax test targets %s", branch, haproxyRequiredBranch)
+
+	oldPath := endpointAllowListFile
+	endpointPath := filepath.Join(t.TempDir(), "endpoint.sources")
+	endpointAllowListFile = endpointPath
+	t.Cleanup(func() { endpointAllowListFile = oldPath })
+	if err := os.WriteFile(endpointPath, []byte("203.0.113.0/24 /api\n198.51.100.7 /login\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	cfg := testHAProxyConfig("http", true, "2445")
@@ -149,6 +160,7 @@ func TestBuildHAProxyConfigSupportsTCPRequestArrivalAndCompletionDrains(t *testi
 	for _, want := range []string{
 		"log-profile proxyble_riodb_request_arrival",
 		`on tcp-req-conn format '{"schema":"proxyble_tcp_request_arrival_v1"`,
+		`"accept_ts_ms":%Ts%ms`,
 		`"policy_action":"%[var(sess.ip_action),json(utf8s)]"`,
 		"log 127.0.0.1:5241 format raw profile proxyble_riodb_request_arrival local0",
 		"tcp-request connection do-log",
@@ -199,6 +211,39 @@ func TestBuildHAProxyConfigSupportsHTTPRequestArrivalOnlyDrain(t *testing.T) {
 	}
 }
 
+func TestBuildHAProxyConfigIncludesEndpointAllowListForHTTPOnly(t *testing.T) {
+	oldPath := endpointAllowListFile
+	path := filepath.Join(t.TempDir(), "endpoint.sources")
+	endpointAllowListFile = path
+	t.Cleanup(func() { endpointAllowListFile = oldPath })
+	if err := os.WriteFile(path, []byte("203.0.113.0/24 /api\n198.51.100.7 /login\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	httpBody, err := buildHAProxyConfig(testHAProxyConfig("http", false, "2445"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"acl proxyble_endpoint_allow_001 path_beg -i /api",
+		"acl proxyble_endpoint_allow_001_src src 203.0.113.0/24",
+		"acl proxyble_endpoint_allow_002 path_beg -i /login",
+		"http-request deny deny_status 403 if { var(txn.proxyble_endpoint_allow_active) -m str 1 } !{ var(txn.proxyble_endpoint_allow_source) -m str 1 }",
+	} {
+		if !strings.Contains(httpBody, want) {
+			t.Fatalf("HTTP HAProxy config missing endpoint allow-list line %q\n%s", want, httpBody)
+		}
+	}
+
+	tcpBody, err := buildHAProxyConfig(testHAProxyConfig("tcp", false, "2444"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(tcpBody, "proxyble_endpoint_allow") {
+		t.Fatalf("TCP HAProxy config should not include endpoint allow-list rules\n%s", tcpBody)
+	}
+}
+
 func TestBuildHAProxyConfigRejectsInvalidRioDBUDPPort(t *testing.T) {
 	cfg := testHAProxyConfig("tcp", true, "70000")
 	if _, err := buildHAProxyConfig(cfg); err == nil {
@@ -215,123 +260,82 @@ func TestBuildHAProxyConfigRejectsInvalidRioDBRequestArrivalUDPPort(t *testing.T
 	}
 }
 
-func TestHAProxyVersionBranch(t *testing.T) {
-	line := "HAProxy version 3.3.10-36 2026/05/11 - https://haproxy.org/"
-	if got := haproxyVersionBranch(line); got != haproxyRequiredBranch {
-		t.Fatalf("haproxyVersionBranch = %q, want %q", got, haproxyRequiredBranch)
+func TestEnsureHAProxyBinaryReusesWorkingManualInstallation(t *testing.T) {
+	binDir := t.TempDir()
+	haproxyPath := filepath.Join(binDir, "haproxy")
+	if err := os.WriteFile(haproxyPath, []byte("#!/bin/sh\nprintf '%s\\n' 'HAProxy version 2.8.26'\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-}
+	t.Setenv("PATH", binDir)
 
-func TestHAProxyAPTCodename(t *testing.T) {
-	tests := []struct {
-		name string
-		p    Platform
-		want string
-	}{
-		{
-			name: "ubuntu 26.04 resolute",
-			p:    Platform{ID: "ubuntu", VersionID: "26.04", Codename: "resolute"},
-			want: "resolute",
-		},
-		{
-			name: "future ubuntu codename",
-			p:    Platform{ID: "ubuntu", VersionID: "28.04", Codename: "future"},
-			want: "future",
-		},
-		{
-			name: "future debian codename",
-			p:    Platform{ID: "debian", VersionID: "14", Codename: "forky"},
-			want: "forky",
-		},
-		{
-			name: "missing codename",
-			p:    Platform{ID: "ubuntu", VersionID: "22.04"},
-			want: "",
-		},
-		{
-			name: "unsafe codename",
-			p:    Platform{ID: "ubuntu", VersionID: "26.04", Codename: "resolute main"},
-			want: "",
-		},
-		{
-			name: "unsupported apt distro",
-			p:    Platform{ID: "mint", VersionID: "22", Codename: "wilma"},
-			want: "",
-		},
+	var out bytes.Buffer
+	installed, err := ensureHAProxyBinary(context.Background(), &out, Platform{PackageManager: "apt-get"}, &packageMetadataSession{})
+	if err != nil {
+		t.Fatalf("ensureHAProxyBinary returned error: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := haproxyAPTCodename(tt.p); got != tt.want {
-				t.Fatalf("haproxyAPTCodename = %q, want %q", got, tt.want)
-			}
-		})
+	if installed {
+		t.Fatalf("existing manual HAProxy installation must not be reported as newly installed")
 	}
-}
-
-func TestHAProxyAPTReleaseURLUsesDetectedCodename(t *testing.T) {
-	got := haproxyAPTReleaseURL("ubuntu", "resolute")
-	want := "https://www.haproxy.com/download/haproxy/performance/ubuntu/ha33/dists/resolute/Release"
-	if got != want {
-		t.Fatalf("haproxyAPTReleaseURL = %q, want %q", got, want)
-	}
-}
-
-func TestHAProxyAPTSourceLineAllowsAMD64AndARM64(t *testing.T) {
-	got := haproxyAPTSourceLine("/usr/share/keyrings/HAPROXY-key-community.asc", "ubuntu", "noble")
-	for _, want := range []string{
-		"deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/HAPROXY-key-community.asc]",
-		"https://www.haproxy.com/download/haproxy/performance/ubuntu/ha33 noble main",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("haproxyAPTSourceLine missing %q in %q", want, got)
+	for _, want := range []string{"Existing HAProxy binary detected", "HAProxy version 2.8.26", "package installation skipped"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("ensureHAProxyBinary output missing %q:\n%s", want, out.String())
 		}
 	}
 }
 
-func TestHAProxyRPMRepoBodyUsesDNFBaseArch(t *testing.T) {
-	got := haproxyRPMRepoBody("9")
-	for _, want := range []string{
-		"[haproxy-33]",
-		"baseurl=https://www.haproxy.com/download/haproxy/performance/rhel/ha33/el9/$basearch",
-		"gpgkey=" + haproxyRPMKeyURL,
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("haproxyRPMRepoBody missing %q in\n%s", want, got)
+func TestEnsureHAProxyBinaryInstallsNativePackageWhenMissing(t *testing.T) {
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "apt-get.log")
+	haproxyPath := filepath.Join(binDir, "haproxy")
+	aptScript := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %s
+case "$*" in
+  *"install -y haproxy"*)
+    printf '#!/bin/sh\necho "HAProxy version 3.0.25"\n' > %s
+    /bin/chmod 755 %s
+    ;;
+esac
+`, commandLog, haproxyPath, haproxyPath)
+	if err := os.WriteFile(filepath.Join(binDir, "apt-get"), []byte(aptScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "dpkg-query"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	configPath := filepath.Join(t.TempDir(), "config.ini")
+	if err := os.WriteFile(configPath, []byte("[haproxy]\ninstalled_by_proxyble=false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Config: &Config{Path: configPath, Data: map[string]map[string]string{
+		"haproxy": {"installed_by_proxyble": "false"},
+	}}}
+
+	var out bytes.Buffer
+	installed, err := ensureHAProxyPackage(context.Background(), app, &out, Platform{Family: platformFamilyDebian, PackageManager: "apt-get"}, &packageMetadataSession{})
+	if err != nil {
+		t.Fatalf("ensureHAProxyPackage returned error: %v\n%s", err, out.String())
+	}
+	if !installed {
+		t.Fatalf("package-manager installation must be reported as newly installed")
+	}
+	if !packageInstalledByProxyble(app.Config, "haproxy") {
+		t.Fatalf("new HAProxy package installation must record Proxyble ownership")
+	}
+	commands, err := os.ReadFile(commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"update", "install -y haproxy"} {
+		if !strings.Contains(string(commands), want) {
+			t.Fatalf("apt-get command log missing %q:\n%s", want, commands)
 		}
 	}
-	if strings.Contains(got, "x86_64") {
-		t.Fatalf("haproxyRPMRepoBody must not pin the repo to x86_64:\n%s", got)
+	if strings.Contains(string(commands), "haproxy-awslc") {
+		t.Fatalf("native installation must not request the legacy performance package:\n%s", commands)
 	}
-}
-
-func TestHAProxyRPMELMajor(t *testing.T) {
-	tests := []struct {
-		name string
-		p    Platform
-		want string
-	}{
-		{
-			name: "amazon",
-			p:    Platform{Family: platformFamilyAmazon, VersionID: "2023"},
-			want: "9",
-		},
-		{
-			name: "rhel9",
-			p:    Platform{Family: platformFamilyRHEL, VersionID: "9.4"},
-			want: "9",
-		},
-		{
-			name: "unsupported rhel8",
-			p:    Platform{Family: platformFamilyRHEL, VersionID: "8.10"},
-			want: "",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := haproxyRPMELMajor(tt.p); got != tt.want {
-				t.Fatalf("haproxyRPMELMajor = %q, want %q", got, tt.want)
-			}
-		})
+	if !strings.Contains(out.String(), "HAProxy package installation completed (HAProxy version 3.0.25)") {
+		t.Fatalf("installation verification output missing:\n%s", out.String())
 	}
 }
 

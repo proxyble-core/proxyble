@@ -29,6 +29,8 @@ first time. After installation, use the other pages as task-focused references.
 7. [Removing Proxyble](07-remove-proxyble.md): remove Proxyble cleanly when you
    no longer need it.
 8. [Logs](08-logs.md): find logs and run quick checks when troubleshooting.
+9. [Allow-list](09-allow-list.md): deny by default on the Proxyble listening
+   port while allowing specific source exceptions.
 
 ## Running Proxyble
 
@@ -56,5 +58,9 @@ including Red Hat, Oracle Linux, AlmaLinux, Rocky Linux, CentOS, and Fedora,
 Amazon Linux, and Azure Linux. Clear Linux, musl-based distributions, and
 non-systemd environments need dedicated support and are not enabled in this
 release.
+
+If a working `haproxy` executable is already installed, Proxyble reuses it.
+Otherwise, Proxyble installs the distribution's native `haproxy` package using
+the detected package manager.
 
 Next: [First run](01-first-run.md)

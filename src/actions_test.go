@@ -20,6 +20,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -312,6 +313,82 @@ func TestPromptJavaRemovalRequiresExplicitChoiceWithAssumeYesCLI(t *testing.T) {
 	_, err := promptJavaRemoval(&App{CommandLine: true, AssumeYes: true})
 	if err == nil || !strings.Contains(err.Error(), "--remove-java or --keep-java") {
 		t.Fatalf("promptJavaRemoval error = %v, want explicit Java choice requirement", err)
+	}
+}
+
+func TestRemoveProxyblePackagesPreservesUnownedPackages(t *testing.T) {
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "apt-get.log")
+	aptScript := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %q\n", commandLog)
+	if err := os.WriteFile(filepath.Join(binDir, "apt-get"), []byte(aptScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	app := &App{Config: &Config{Data: map[string]map[string]string{}}}
+	p := Platform{Family: platformFamilyDebian, PackageManager: "apt-get"}
+
+	if err := removeProxyblePackages(context.Background(), app, p, false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(commandLog); !os.IsNotExist(err) {
+		t.Fatalf("package manager should not run for unowned packages; stat error = %v", err)
+	}
+}
+
+func TestRemoveProxyblePackagesPropagatesFailure(t *testing.T) {
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "apt-get.log")
+	aptScript := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %q
+case "$*" in
+  *"purge -y haproxy"*) exit 42 ;;
+esac
+`, commandLog)
+	if err := os.WriteFile(filepath.Join(binDir, "apt-get"), []byte(aptScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	app := &App{Config: &Config{Data: map[string]map[string]string{
+		"haproxy":  {"installed_by_proxyble": "true"},
+		"nftables": {"installed_by_proxyble": "true"},
+	}}}
+	p := Platform{Family: platformFamilyDebian, PackageManager: "apt-get"}
+
+	err := removeProxyblePackages(context.Background(), app, p, false, false, false)
+	if err == nil || !strings.Contains(err.Error(), "remove HAProxy package") {
+		t.Fatalf("package removal error = %v, want propagated HAProxy failure", err)
+	}
+	commands := readTestFile(t, commandLog)
+	if strings.Contains(commands, "nftables") || strings.Contains(commands, "autoremove") {
+		t.Fatalf("teardown should stop at the first package failure:\n%s", commands)
+	}
+	if !strings.Contains(commands, "DPkg::Lock::Timeout=120") {
+		t.Fatalf("package removal did not request APT lock waiting:\n%s", commands)
+	}
+}
+
+func TestRemoveProxyblePackagesRemovesOwnedPackages(t *testing.T) {
+	binDir := t.TempDir()
+	commandLog := filepath.Join(t.TempDir(), "apt-get.log")
+	aptScript := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> %q\n", commandLog)
+	if err := os.WriteFile(filepath.Join(binDir, "apt-get"), []byte(aptScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	app := &App{Config: &Config{Data: map[string]map[string]string{
+		"haproxy":  {"installed_by_proxyble": "true"},
+		"nftables": {"installed_by_proxyble": "true"},
+	}}}
+	p := Platform{Family: platformFamilyDebian, PackageManager: "apt-get"}
+
+	if err := removeProxyblePackages(context.Background(), app, p, false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	commands := readTestFile(t, commandLog)
+	for _, want := range []string{"purge -y haproxy", "purge -y nftables", "autoremove -y"} {
+		if !strings.Contains(commands, want) {
+			t.Fatalf("owned package teardown missing %q:\n%s", want, commands)
+		}
 	}
 }
 

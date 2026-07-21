@@ -63,3 +63,35 @@ func TestEnableRioDBConfigMigratesLegacyInstallRoot(t *testing.T) {
 		t.Fatalf("config file was not migrated:\n%s", data)
 	}
 }
+
+func TestPackageOwnershipDefaultsToPreservedAndPersistsWhenRecorded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.ini")
+	if err := os.WriteFile(path, []byte(configTemplate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, section := range []string{"haproxy", "nftables"} {
+		if packageInstalledByProxyble(cfg, section) {
+			t.Fatalf("new %s ownership marker should default to false", section)
+		}
+	}
+	if err := recordPackageInstalledByProxyble(cfg, "haproxy"); err != nil {
+		t.Fatal(err)
+	}
+	if !packageInstalledByProxyble(cfg, "haproxy") {
+		t.Fatalf("recorded HAProxy ownership marker should be true")
+	}
+	if packageInstalledByProxyble(cfg, "nftables") {
+		t.Fatalf("recording HAProxy ownership must not change nftables ownership")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "[haproxy]\nenabled=false\ninstalled_by_proxyble=true\n") {
+		t.Fatalf("HAProxy ownership was not persisted:\n%s", body)
+	}
+}

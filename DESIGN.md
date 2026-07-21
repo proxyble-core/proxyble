@@ -232,7 +232,7 @@ active rules across service restarts and timer runs. The timer is required
 because expiration is driven by comparing this state with the current time.
 
 Rule-agent logs are written under `/var/log/proxyble-rule-agent` as daily log
-files. The installer and management wizard also maintain Proxyble action logs
+files. The installer and management UI also maintain Proxyble action logs
 under `/var/log/proxyble`.
 
 ## HAProxy Enforcement
@@ -297,6 +297,85 @@ The batch deletes and recreates the Proxyble-owned `inet pmgr` table in a
 single nft transaction, then rebuilds its sets and rules from
 `rule_state_nft.json`. Do not add unrelated operator-managed firewall rules to
 the `pmgr` table; it belongs to Proxyble and can be rebuilt by the rule agent.
+
+## Basic Allow-List Enforcement
+
+The Basic allow-list is intentionally separate from the rule agent. It applies
+only to the configured Proxyble listening port and uses its own nftables table:
+
+```text
+/etc/proxyble/allow-list/basic.sources  root:root 0600
+/etc/proxyble/allow-list/basic.nft      root:root 0600
+inet proxyble_allowlist
+```
+
+The allow-list file contains one IPv4 address or CIDR per line. The installer
+creates `/etc/proxyble/allow-list` as `root:root 0700` and the Basic source file
+as `root:root 0600`. Proxyble renders `basic.nft` from `basic.sources` and
+applies it with `nft -f`.
+
+When the Basic allow-list has entries, Proxyble renders an atomic nft batch that
+creates an `inet proxyble_allowlist` input hook before the rule-agent `pmgr`
+hook. Sources in `basic.sources` are allowed to continue to later firewall and
+rule-agent processing. Other TCP traffic to the configured HAProxy listener port
+is rejected. When the Basic list is emptied, Proxyble deletes the
+`proxyble_allowlist` table so the listener is no longer deny-by-default.
+
+Do not move Basic allow-list rules into `inet pmgr`. The rule agent owns and
+rebuilds `pmgr`; allow-list state must remain independent so manual
+deny-by-default behavior is not removed by rule-agent reconciliation.
+
+## Endpoint Allow-List Enforcement
+
+Endpoint allow-lists are also separate from the rule agent, but they are enforced
+in HAProxy instead of nftables because they depend on HTTP path matching:
+
+```text
+/etc/proxyble/allow-list/endpoint.sources  root:root 0600
+```
+
+Each non-comment line contains one IPv4 address or CIDR followed by one endpoint
+path:
+
+```text
+203.0.113.10 /api
+198.51.100.0/24 /login
+```
+
+Endpoint allow-list is only available in HTTP and HTTPS modes. When entries
+exist, Proxyble regenerates `haproxy.cfg` with endpoint ACLs and reloads HAProxy
+under the shared HAProxy lock. Requests matching a listed endpoint path prefix
+are denied by default unless the request source matches at least one allowed
+IPv4 address or CIDR for that endpoint. Emptying `endpoint.sources` removes
+those HAProxy ACLs and disables endpoint default-deny behavior.
+
+## Runtime Coordination Locks
+
+Proxyble core and `proxyble-rule-agent` can both mutate shared enforcement
+backends, so they coordinate with advisory `flock` locks under a root-only
+runtime directory:
+
+```text
+/run/proxyble/locks              root:root 0700
+/run/proxyble/locks/haproxy.lock root:root 0600
+/run/proxyble/locks/nftables.lock root:root 0600
+```
+
+The lock directory is created without following symlinks and the lock files are
+opened with no-follow semantics. This prevents an untrusted local user from
+pre-placing a symlink or permissive lock path that could redirect privileged
+writes.
+
+All HAProxy config renders, HAProxy reloads/restarts, HAProxy Runtime API map
+updates, and HAProxy map-file rewrites must hold `haproxy.lock`. The rule agent
+writes `/etc/haproxy/maps/*.map` while holding this lock before applying the
+same state through the Runtime API, so a later HAProxy reload can reconstruct
+the active rule maps from disk.
+
+All Proxyble-managed nftables transactions must hold `nftables.lock`, including
+Basic allow-list `nft -f`, nftables service pre-start initialization, and
+rule-agent `pmgr` batch rebuilds. This does not merge Basic allow-list state into
+`inet pmgr`; it only serializes access to the nftables backend.
 
 ## systemd Units
 

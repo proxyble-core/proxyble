@@ -116,7 +116,7 @@ Usage:
 
 One of the core design principles of this program is to **avoid service restarts**.
 
-* **HAProxy Updates:** The program **never restarts HAProxy**. Instead, it connects to the HAProxy Runtime API via a Unix Domain Socket (`/run/haproxy/admin.sock`). It clears and repopulates `rules.map`, `params.map`, and `endpoint-rates.map` using runtime commands, reads the Runtime API responses, and treats reported command errors as enforcement failures. These map updates do not drop active connections.
+* **HAProxy Updates:** The program **never restarts HAProxy**. It holds `/run/proxyble/locks/haproxy.lock`, rewrites the HAProxy map files, then connects to the HAProxy Runtime API via a Unix Domain Socket (`/run/haproxy/admin.sock`). It clears and repopulates `rules.map`, `params.map`, and `endpoint-rates.map` using runtime commands, reads the Runtime API responses, and treats reported command errors as enforcement failures. These map updates do not drop active connections, and the map files remain authoritative across HAProxy reloads.
 * **NFTables Updates:** The program uses a "Nuclear Reset" batch pattern. It writes all instructions to a private temporary file and executes `nft -f`. This tells the kernel to process the entire table wipe and rebuild as a **single atomic transaction**. The firewall is never "open" during the update.
 
 ### Synchronization & Persistence
@@ -139,7 +139,7 @@ The program does not run as a continuous background daemon. It is triggered by `
 
 ## 4. Safety & Concurrency Controls
 
-* **File Locking:** The program uses `syscall.Flock` on `/run/proxyble-rule-agent/rule_agent.lock`. If a large batch of rules is still being processed and another trigger occurs, the second instance will exit immediately to prevent data corruption.
+* **File Locking:** The program uses `syscall.Flock` on `/run/proxyble-rule-agent/rule_agent.lock`. If a large batch of rules is still being processed and another trigger occurs, the second instance will exit immediately to prevent data corruption. HAProxy and nftables apply paths also take shared Proxyble coordination locks under `/run/proxyble/locks` so the management wizard/CLI and rule agent do not mutate the same backend at the same time.
 * **Backoff Timer:** To prevent CPU spikes during "rule storms," the program records a timestamp in `last_reload`. It will wait at least 1 second between consecutive executions.
 * **Renaming Logic:** Upon starting, the program renames `inbox.tmp` to `inbox.tmp.processing`, then immediately recreates a fresh `root:riodb` inbox file. This gives the processor a stable snapshot while RioDB keeps a narrow append-only handoff target.
 
@@ -161,6 +161,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -177,6 +178,10 @@ const (
 	lockFile       = "/run/proxyble-rule-agent/rule_agent.lock" // Ensures only one instance runs
 	lastReloadFile = "/var/lib/proxyble-rule-agent/last_reload" // Tracks timestamps for backoff logic
 	logDir         = "/var/log/proxyble-rule-agent"             // Directory for daily logs
+
+	sharedRuntimeLockDir   = "/run/proxyble/locks"
+	sharedHAProxyLockFile  = sharedRuntimeLockDir + "/haproxy.lock"
+	sharedNFTablesLockFile = sharedRuntimeLockDir + "/nftables.lock"
 
 	// State persistence: allows the program to remember active rules between runs
 	nftStateFile     = "/var/lib/proxyble-rule-agent/rule_state_nft.json"
@@ -197,6 +202,7 @@ const (
 	inboxFileMode             = 0o620
 	privateFileMode           = 0o600
 	privateDirMode            = 0o700
+	haproxyMapFileMode        = 0o640
 	maxInputLinesPerRun       = 10000
 	nftDynamicSetSize         = 65536
 )
@@ -426,6 +432,15 @@ func shouldSkipRuleForMode(p Rule, mode string) bool {
 
 // applyNFT generates a batch script for nftables and executes it
 func applyNFT(s State) error {
+	lock, err := acquireSharedLock(sharedNFTablesLockFile)
+	if err != nil {
+		return err
+	}
+	defer releaseLock(lock)
+	return applyNFTLocked(s)
+}
+
+func applyNFTLocked(s State) error {
 	batch := buildNFTBatch(s)
 	if err := applyNFTBatch(batch); err != nil {
 		if nftBatchFailedBecauseTableMissing(err) {
@@ -514,6 +529,14 @@ func nftBatchFailedBecauseTableMissing(err error) bool {
 
 // applyHAProxy communicates with the HAProxy Runtime API over a Unix Domain Socket
 func applyHAProxy(s State) error {
+	lock, err := acquireSharedLock(sharedHAProxyLockFile)
+	if err != nil {
+		return err
+	}
+	defer releaseLock(lock)
+	if err := writeHAProxyMapFiles(s); err != nil {
+		return err
+	}
 	for _, command := range buildHAProxyCommands(s) {
 		response, err := runHAProxyRuntimeCommand(command)
 		if err != nil {
@@ -573,6 +596,50 @@ func buildHAProxyPayload(s State) string {
 		return ""
 	}
 	return strings.Join(commands, "\n") + "\n"
+}
+
+type haproxyMapBodies struct {
+	rules         string
+	params        string
+	endpointRates string
+}
+
+func buildHAProxyMapBodies(s State) haproxyMapBodies {
+	var rules, params, endpointRates strings.Builder
+	for _, p := range sortedRules(s, SystemHAProxy) {
+		haCode := translateToHaCode(p.Action)
+		fmt.Fprintf(&rules, "%s %s\n", p.IP, haCode)
+		if p.Parameter != "" {
+			fmt.Fprintf(&params, "%s %s\n", p.IP, p.Parameter)
+		}
+		if p.Action == ActionLimitEndpoint {
+			for _, endpoint := range p.Endpoints {
+				fmt.Fprintf(&endpointRates, "%s %d\n", endpointMapKey(p.IP, endpoint), p.EndpointRateLimit)
+			}
+		}
+	}
+	return haproxyMapBodies{
+		rules:         rules.String(),
+		params:        params.String(),
+		endpointRates: endpointRates.String(),
+	}
+}
+
+func writeHAProxyMapFiles(s State) error {
+	bodies := buildHAProxyMapBodies(s)
+	for _, file := range []struct {
+		path string
+		body string
+	}{
+		{mapRules, bodies.rules},
+		{mapParams, bodies.params},
+		{mapEndpointRates, bodies.endpointRates},
+	} {
+		if err := atomicWriteHAProxyMapFile(file.path, []byte(file.body)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func sendHAProxyRuntimePayload(conn net.Conn, payload string) (string, error) {
@@ -1286,27 +1353,59 @@ func setupDailyLogger() {
 
 // acquireLock uses syscall.Flock to prevent multiple instances from running
 func acquireLock(path string) *os.File {
-	if err := os.MkdirAll(filepath.Dir(path), privateDirMode); err != nil {
-		log.Printf("ERROR ACTION=OPEN_LOCK_DIR DIR=%s MSG=\"%v\"", filepath.Dir(path), err)
-		os.Exit(1)
-	}
-	_ = os.Chmod(filepath.Dir(path), privateDirMode)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, privateFileMode)
+	f, err := openSecureLockFile(path)
 	if err != nil {
 		log.Printf("ERROR ACTION=OPEN_LOCK FILE=%s MSG=\"%v\"", path, err)
 		os.Exit(1)
 	}
-	_ = os.Chmod(path, privateFileMode)
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		os.Exit(0) // Exit silently if another process holds the lock
 	}
 	return f
 }
 
+func acquireSharedLock(path string) (*os.File, error) {
+	f, err := openSecureLockFile(path)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			return f, nil
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return nil, fmt.Errorf("could not acquire shared coordination lock: %s", path)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func openSecureLockFile(path string) (*os.File, error) {
+	dir := filepath.Dir(path)
+	if err := ensureSecureDir(dir, privateDirMode); err != nil {
+		return nil, err
+	}
+	if err := rejectSymlinkIfExists(path); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, privateFileMode)
+	if err != nil {
+		return nil, err
+	}
+	_ = os.Chmod(path, privateFileMode)
+	_ = chownRoot(path)
+	return f, nil
+}
+
 // releaseLock unlocks and closes the lock file
 func releaseLock(f *os.File) {
+	if f == nil {
+		return
+	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	f.Close()
+	_ = f.Close()
 }
 
 // waitBackoff ensures the program doesn't run more than once per backoffSeconds
@@ -1342,4 +1441,151 @@ func writePrivateFile(path string, data []byte) error {
 		return err
 	}
 	return os.Chmod(path, privateFileMode)
+}
+
+func atomicWriteHAProxyMapFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := rejectSymlinkInPath(dir); err != nil {
+		return err
+	}
+	if err := rejectSymlinkIfExists(path); err != nil {
+		return err
+	}
+	uid, gid := existingFileOwner(path)
+	mode := os.FileMode(haproxyMapFileMode)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if uid < 0 || gid < 0 {
+		uid, gid = defaultHAProxyMapOwner()
+	}
+	tmp, err := os.CreateTemp(dir, ".proxyble-map-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if os.Geteuid() == 0 && uid >= 0 && gid >= 0 {
+		_ = tmp.Chown(uid, gid)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	_ = os.Chmod(path, mode)
+	if os.Geteuid() == 0 && uid >= 0 && gid >= 0 {
+		_ = os.Chown(path, uid, gid)
+	}
+	return nil
+}
+
+func existingFileOwner(path string) (int, int) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return -1, -1
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int(stat.Uid), int(stat.Gid)
+	}
+	return -1, -1
+}
+
+func defaultHAProxyMapOwner() (int, int) {
+	uid := 0
+	gid := 0
+	if g, err := user.LookupGroup("haproxy"); err == nil {
+		if parsed, parseErr := strconv.Atoi(g.Gid); parseErr == nil {
+			gid = parsed
+		}
+	}
+	return uid, gid
+}
+
+func ensureSecureDir(path string, mode os.FileMode) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("refusing non-absolute directory path: %s", path)
+	}
+	clean := filepath.Clean(path)
+	current := string(filepath.Separator)
+	parts := strings.Split(strings.TrimPrefix(clean, string(filepath.Separator)), string(filepath.Separator))
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			if err := os.Mkdir(current, mode); err != nil && !os.IsExist(err) {
+				return err
+			}
+			_ = os.Chmod(current, mode)
+			_ = chownRoot(current)
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to use symlinked directory path: %s", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("refusing to use non-directory path: %s", current)
+		}
+	}
+	_ = os.Chmod(clean, mode)
+	_ = chownRoot(clean)
+	return nil
+}
+
+func rejectSymlinkIfExists(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to use symlinked path: %s", path)
+	}
+	return nil
+}
+
+func rejectSymlinkInPath(path string) error {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		return fmt.Errorf("refusing non-absolute path: %s", path)
+	}
+	current := string(filepath.Separator)
+	for _, part := range strings.Split(strings.TrimPrefix(clean, string(filepath.Separator)), string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to use path through symlink: %s", current)
+		}
+	}
+	return nil
+}
+
+func chownRoot(path string) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	return os.Chown(path, 0, 0)
 }

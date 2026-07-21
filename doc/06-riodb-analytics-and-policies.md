@@ -178,5 +178,11 @@ Default policy templates include:
 | `scraping_and_ai_crawler_cost_control` | Successful reads, broad URL traversal, and crawler-like extraction. |
 | `slow_client_and_connection_hoarding_control` | Slow connections, long request duration, low throughput, or high connection occupancy. |
 
+
+## Build Policies With AI
+A separate GitHub repository contains a Codex-ready project for leveraging AI to
+generate advanced Proxyble protection policies. See [Proxyble AI Policy Maker](https://github.com/proxyble-core/proxyble-ai-policy-maker).
+
+
 Previous: [Running Proxyble](05-running-proxyble.md)  
 Next: [Removing Proxyble](07-remove-proxyble.md)

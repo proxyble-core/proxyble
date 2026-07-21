@@ -25,7 +25,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,11 +39,7 @@ import (
 const haproxyRuntimeAdminGroup = "proxyble-haproxy-admin"
 
 const (
-	haproxyRequiredBranch      = "3.3"
-	haproxyRepoVersionNumerals = "33"
-	haproxyPerformancePackage  = "haproxy-awslc"
-	haproxyAPTKeyURL           = "https://pks.haproxy.com/linux/community/RPM-GPG-KEY-HAProxy"
-	haproxyRPMKeyURL           = "https://www.haproxy.com/download/haproxy/HAPROXY-key-community.asc"
+	legacyHAProxyPerformancePackage = "haproxy-awslc"
 
 	haproxyMetricLayerRequestArrival    = "request-arrival"
 	haproxyMetricLayerRequestCompletion = "request-completion"
@@ -149,13 +144,18 @@ func configuredHAProxyMetricDrains(c *Config, mode string) (haproxyMetricDrains,
 	return drains, nil
 }
 
+// HAProxy 2.8 does not provide the accept_date() or request_date() sample
+// fetches. %Ts followed by the zero-padded %ms log variable preserves an
+// unquoted epoch-millisecond accept timestamp. HTTP request time is captured
+// once into txn.request_ts_ms so arrival and completion logs reuse the same
+// numeric value.
 func haproxyTCPRequestArrivalLogFields() []string {
 	return []string{
 		haproxyJSONStringField("schema", "proxyble_tcp_request_arrival_v1"),
 		haproxyJSONStringField("event_stage", "request_arrival"),
 		haproxyJSONStringField("traffic_mode", "tcp"),
 		haproxyJSONStringField("request_id", "%ID"),
-		haproxyJSONField("accept_ts_ms", "%[accept_date(ms)]"),
+		haproxyJSONField("accept_ts_ms", "%Ts%ms"),
 		haproxyJSONStringField("source_ip", "%ci"),
 		haproxyJSONField("source_port", "%cp"),
 		haproxyJSONStringField("frontend_ip", "%fi"),
@@ -199,8 +199,8 @@ func haproxyHTTPRequestArrivalLogFields() []string {
 		haproxyJSONStringField("event_stage", "request_arrival"),
 		haproxyJSONStringField("traffic_mode", "http"),
 		haproxyJSONStringField("request_id", "%ID"),
-		haproxyJSONField("accept_ts_ms", "%[accept_date(ms)]"),
-		haproxyJSONField("request_ts_ms", "%[request_date(ms)]"),
+		haproxyJSONField("accept_ts_ms", "%Ts%ms"),
+		haproxyJSONField("request_ts_ms", "%[var(txn.request_ts_ms)]"),
 		haproxyJSONStringField("source_ip", "%ci"),
 		haproxyJSONField("source_port", "%cp"),
 		haproxyJSONStringField("real_client_ip", "%[var(txn.real_client_ip),json(utf8s)]"),
@@ -417,237 +417,72 @@ func haproxyVersionLine(ctx context.Context) (string, error) {
 	return strings.SplitN(strings.TrimSpace(buf.String()), "\n", 2)[0], nil
 }
 
-func haproxyVersionBranch(line string) string {
-	fields := strings.Fields(line)
-	for i, field := range fields {
-		if strings.EqualFold(field, "version") && i+1 < len(fields) {
-			version := strings.TrimLeft(fields[i+1], "v")
-			parts := strings.Split(version, ".")
-			if len(parts) >= 2 {
-				return parts[0] + "." + parts[1]
-			}
-			return version
-		}
-	}
-	return ""
-}
-
-func haproxyPackageName(p Platform) string {
-	switch p.PackageManager {
-	case "apt-get", "dnf", "yum":
-		return haproxyPerformancePackage
-	default:
-		return defaultHAProxyPackage
-	}
-}
-
 func haproxyRemovalPackages(Platform) []string {
-	return []string{haproxyPerformancePackage, defaultHAProxyPackage}
+	// Retain the former performance-package name so removal also works for
+	// hosts installed by older Proxyble releases.
+	return []string{legacyHAProxyPerformancePackage, defaultHAProxyPackage}
 }
 
-func ensureHAProxy33PackageSource(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform) error {
-	switch p.PackageManager {
-	case "apt-get":
-		return ensureHAProxy33APTSource(ctx, out, p)
-	case "dnf", "yum":
-		return ensureHAProxy33RPMSource(ctx, out, p)
-	default:
-		return fmt.Errorf("HAProxy %s packages are not configured for package manager %s", haproxyRequiredBranch, p.PackageManager)
-	}
-}
-
-func ensureHAProxy33APTSource(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform) error {
-	distro := strings.ToLower(strings.TrimSpace(p.ID))
-	if distro != "ubuntu" && distro != "debian" {
-		return fmt.Errorf("official HAProxy %s apt packages are configured for Ubuntu/Debian; detected %s", haproxyRequiredBranch, p.PrettyName)
-	}
-	codename := haproxyAPTCodename(p)
-	if codename == "" {
-		return fmt.Errorf("official HAProxy %s apt packages require a detected apt codename; detected %s without VERSION_CODENAME/UBUNTU_CODENAME", haproxyRequiredBranch, p.PrettyName)
-	}
-	if err := requireHAProxyAPTRelease(ctx, distro, codename); err != nil {
-		return err
-	}
-	keyPath := "/usr/share/keyrings/HAPROXY-key-community.asc"
-	if err := downloadFile(ctx, out, haproxyAPTKeyURL, keyPath, 0o644); err != nil {
-		return err
-	}
-	source := haproxyAPTSourceLine(keyPath, distro, codename)
-	path := "/etc/apt/sources.list.d/haproxy.list"
-	current, _ := os.ReadFile(path)
-	if string(current) == source {
-		fmt.Fprintln(out, "[PASS] HAProxy 3.3 apt source already current")
-		return nil
-	}
-	if err := atomicWriteFile(path, []byte(source), 0o644); err != nil {
-		return err
-	}
-	_ = chownPath(path, "root", "root")
-	fmt.Fprintln(out, "[PASS] HAProxy 3.3 apt source configured")
-	return nil
-}
-
-func haproxyAPTSourceLine(keyPath, distro, codename string) string {
-	return fmt.Sprintf("deb [arch=amd64,arm64 signed-by=%s] %s %s main\n", keyPath, haproxyAPTRepoBaseURL(distro), codename)
-}
-
-func haproxyAPTRepoBaseURL(distro string) string {
-	return fmt.Sprintf("https://www.haproxy.com/download/haproxy/performance/%s/ha%s", distro, haproxyRepoVersionNumerals)
-}
-
-func haproxyAPTReleaseURL(distro, codename string) string {
-	return fmt.Sprintf("%s/dists/%s/Release", haproxyAPTRepoBaseURL(distro), codename)
-}
-
-func haproxyAPTCodename(p Platform) string {
-	codename := strings.ToLower(strings.TrimSpace(p.Codename))
-	if codename == "" || !safeAPTCodename(codename) {
-		return ""
-	}
-	switch strings.ToLower(strings.TrimSpace(p.ID)) {
-	case "ubuntu", "debian":
-		return codename
-	}
-	return ""
-}
-
-func safeAPTCodename(codename string) bool {
-	for _, r := range codename {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
-			continue
+// ensureHAProxyBinary reuses any working HAProxy already on PATH. When no
+// binary is present, it installs the distribution's native Community package
+// through the package manager selected during platform detection.
+func ensureHAProxyBinary(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform, packageSession *packageMetadataSession) (bool, error) {
+	if commandExists("haproxy") {
+		line, err := haproxyVersionLine(ctx)
+		if err != nil {
+			return false, fmt.Errorf("existing HAProxy binary detected but version verification failed: %w", err)
 		}
-		return false
+		fmt.Fprintf(out, "[PASS] Existing HAProxy binary detected (%s); package installation skipped\n", line)
+		return false, nil
 	}
-	return true
-}
 
-func requireHAProxyAPTRelease(ctx context.Context, distro, codename string) error {
-	releaseURL := haproxyAPTReleaseURL(distro, codename)
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodHead, releaseURL, nil)
+	fmt.Fprintln(out, "[NOTICE] HAProxy binary not detected")
+	fmt.Fprintf(out, "[INFO] Installing native HAProxy package via %s\n", p.PackageManager)
+	if err := packageSession.update(ctx, p, out); err != nil {
+		return false, err
+	}
+	if err := packageInstall(ctx, p, out, defaultHAProxyPackage); err != nil {
+		return false, err
+	}
+	line, err := haproxyVersionLine(ctx)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("HAProxy package installation completed but version verification failed: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	fmt.Fprintf(out, "[PASS] HAProxy package installation completed (%s)\n", line)
+	return true, nil
+}
+
+func ensureHAProxyPackage(ctx context.Context, a *App, out interface{ Write([]byte) (int, error) }, p Platform, packageSession *packageMetadataSession) (bool, error) {
+	if commandExists("haproxy") {
+		return ensureHAProxyBinary(ctx, out, p, packageSession)
+	}
+	installedBefore, err := packageInstalled(ctx, p, defaultHAProxyPackage)
 	if err != nil {
-		return fmt.Errorf("check HAProxy %s apt repository for %s %s: %w", haproxyRequiredBranch, distro, codename, err)
+		return false, fmt.Errorf("detect existing HAProxy package ownership: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
-		return nil
+	installedNow, err := ensureHAProxyBinary(ctx, out, p, packageSession)
+	if err != nil {
+		return false, err
 	}
-	return fmt.Errorf("official HAProxy %s apt packages are not published for %s codename %q yet (checked %s: HTTP %s)", haproxyRequiredBranch, distro, codename, releaseURL, resp.Status)
-}
-
-func ensureHAProxy33RPMSource(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform) error {
-	elMajor := haproxyRPMELMajor(p)
-	if elMajor == "" {
-		return fmt.Errorf("official HAProxy %s RPM packages require a RHEL-compatible 9/10 host; detected %s", haproxyRequiredBranch, p.PrettyName)
-	}
-	_ = runCommand(ctx, out, "rpm", "--import", haproxyRPMKeyURL)
-	body := haproxyRPMRepoBody(elMajor)
-	path := "/etc/yum.repos.d/haproxy-33.repo"
-	current, _ := os.ReadFile(path)
-	if string(current) == body {
-		fmt.Fprintln(out, "[PASS] HAProxy 3.3 RPM source already current")
-		return nil
-	}
-	if err := atomicWriteFile(path, []byte(body), 0o644); err != nil {
-		return err
-	}
-	_ = chownPath(path, "root", "root")
-	cleanHAProxyRPMMetadata(ctx, out, p.PackageManager)
-	fmt.Fprintln(out, "[PASS] HAProxy 3.3 RPM source configured")
-	return nil
-}
-
-func cleanHAProxyRPMMetadata(ctx context.Context, out interface{ Write([]byte) (int, error) }, packageManager string) {
-	switch packageManager {
-	case "dnf", "yum":
-		_ = runCommand(ctx, out, packageManager, "--disablerepo=*", "--enablerepo=haproxy-33", "clean", "metadata")
-	}
-}
-
-func haproxyRPMRepoBody(elMajor string) string {
-	return fmt.Sprintf(`[haproxy-33]
-name=HAProxy 3.3 Community Performance Packages
-baseurl=https://www.haproxy.com/download/haproxy/performance/rhel/ha%s/el%s/$basearch
-enabled=1
-gpgcheck=1
-gpgkey=%s
-`, haproxyRepoVersionNumerals, elMajor, haproxyRPMKeyURL)
-}
-
-func haproxyRPMELMajor(p Platform) string {
-	if p.Family == platformFamilyAmazon {
-		if majorVersion(p.VersionID) != "2023" {
-			return ""
+	if installedNow && !installedBefore {
+		if err := recordPackageInstalledByProxyble(a.Config, "haproxy"); err != nil {
+			return false, fmt.Errorf("record HAProxy package ownership: %w", err)
 		}
-		// Amazon Linux 2023 follows the RHEL-family install path in Proxyble; use
-		// the el9 HAProxy package repo so Amazon hosts can still get HAProxy 3.3.
-		return "9"
 	}
-	major := majorVersion(p.VersionID)
-	if major == "9" || major == "10" {
-		return major
-	}
-	return ""
-}
-
-func majorVersion(version string) string {
-	version = strings.TrimSpace(strings.Trim(version, `"`))
-	if version == "" {
-		return ""
-	}
-	major, _, _ := strings.Cut(version, ".")
-	return major
+	return installedNow, nil
 }
 
 // installHAProxySoftware installs the OS package when missing and prepares
 // runtime directories, maps, tmpfiles, and systemd hardening.
-func installHAProxySoftware(ctx context.Context, a *App, p Platform) error {
+func installHAProxySoftware(ctx context.Context, a *App, p Platform, packageSession *packageMetadataSession) error {
 	out := stepOutput(a)
 	fmt.Fprintln(out, "[NOTICE] HAProxy Community Edition - licensed under GPLv2")
 	fmt.Fprintln(out, "[INFO] Performing HAProxy package and runtime bootstrap")
-	a.InstalledNow = false
-	needsInstall := true
-	if commandExists("haproxy") {
-		line, err := haproxyVersionLine(ctx)
-		if err == nil && haproxyVersionBranch(line) == haproxyRequiredBranch {
-			needsInstall = false
-			fmt.Fprintf(out, "[PASS] HAProxy %s binary present (%s)\n", haproxyRequiredBranch, line)
-		} else {
-			if line != "" {
-				fmt.Fprintf(out, "[NOTICE] Existing HAProxy is not %s (%s)\n", haproxyRequiredBranch, line)
-			} else {
-				fmt.Fprintf(out, "[NOTICE] Existing HAProxy version check failed: %v\n", err)
-			}
-		}
-	} else {
-		fmt.Fprintln(out, "[NOTICE] HAProxy binary not detected")
+	installedNow, err := ensureHAProxyPackage(ctx, a, out, p, packageSession)
+	if err != nil {
+		return err
 	}
-	if needsInstall {
-		fmt.Fprintf(out, "[INFO] Installing HAProxy %s via official HAProxy package source\n", haproxyRequiredBranch)
-		if err := ensureHAProxy33PackageSource(ctx, out, p); err != nil {
-			return err
-		}
-		if err := packageUpdate(ctx, p, out); err != nil {
-			return err
-		}
-		if err := packageInstall(ctx, p, out, haproxyPackageName(p)); err != nil {
-			return err
-		}
-		a.InstalledNow = true
-		line, err := haproxyVersionLine(ctx)
-		if err != nil {
-			return fmt.Errorf("HAProxy installation completed but version verification failed: %w", err)
-		}
-		if haproxyVersionBranch(line) != haproxyRequiredBranch {
-			return fmt.Errorf("HAProxy %s is required but installed binary reports: %s", haproxyRequiredBranch, line)
-		}
-		fmt.Fprintf(out, "[PASS] HAProxy %s installation completed (%s)\n", haproxyRequiredBranch, line)
-	}
+	a.InstalledNow = installedNow
 	if !groupExists(haproxyRuntimeAdminGroup) {
 		if err := runCommand(ctx, out, "groupadd", "-r", haproxyRuntimeAdminGroup); err != nil {
 			return err
@@ -797,6 +632,13 @@ func buildHAProxyConfig(c *Config) (string, error) {
 		return "", err
 	}
 	legacyCompletionLogging := metricDrains.requestCompletion && !metricDrains.requestArrival
+	var endpointAllowListEntries []endpointAllowListEntry
+	if mode == "http" {
+		endpointAllowListEntries, err = loadEndpointAllowListEntries(endpointAllowListFile)
+		if err != nil {
+			return "", err
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString("global\n")
@@ -908,7 +750,8 @@ defaults
 `)
 		}
 		if metricDrains.enabled() {
-			b.WriteString(`    http-request set-var(txn.real_client_ip) req.fhdr(x-forwarded-for)
+			b.WriteString(`    http-request set-var(txn.request_ts_ms) date(0,ms)
+    http-request set-var(txn.real_client_ip) req.fhdr(x-forwarded-for)
     http-request set-var(txn.host) req.fhdr(host)
     http-request set-var(txn.method) method
     http-request set-var(txn.path) path
@@ -939,6 +782,9 @@ defaults
     http-request set-var(txn.endpoint_rate) base32+src,table_http_req_rate()
 
 `)
+		if len(endpointAllowListEntries) > 0 {
+			b.WriteString(buildEndpointAllowListHAProxyRules(endpointAllowListEntries))
+		}
 		if metricDrains.requestArrival {
 			b.WriteString("    http-request do-log\n")
 		}
@@ -976,6 +822,12 @@ defaults
 // renderHAProxyConfig renders, syntax-checks, backs up, and installs the HAProxy
 // config for the current traffic mode and backend set.
 func renderHAProxyConfig(ctx context.Context, a *App) error {
+	return withHAProxyCoordinationLock(func() error {
+		return renderHAProxyConfigLocked(ctx, a)
+	})
+}
+
+func renderHAProxyConfigLocked(ctx context.Context, a *App) error {
 	c := a.Config
 	out := stepOutput(a)
 	body, err := buildHAProxyConfig(c)
@@ -1021,11 +873,15 @@ func renderHAProxyConfig(ctx context.Context, a *App) error {
 // applyHAProxyIfEnabled ensures HAProxy dependencies and config are current when
 // the stored configuration says HAProxy can run.
 func applyHAProxyIfEnabled(ctx context.Context, a *App, p Platform) error {
+	return applyHAProxyIfEnabledWithPackageSession(ctx, a, p, &packageMetadataSession{})
+}
+
+func applyHAProxyIfEnabledWithPackageSession(ctx context.Context, a *App, p Platform, packageSession *packageMetadataSession) error {
 	if !configIsTrue(a.Config.Get("haproxy", "enabled", "false")) {
 		fmt.Fprintf(stepOutput(a), "[NOTICE] HAProxy is disabled in %s; listener/backend configuration is incomplete.\n", a.Config.Path)
 		return nil
 	}
-	if err := installHAProxySoftware(ctx, a, p); err != nil {
+	if err := installHAProxySoftware(ctx, a, p, packageSession); err != nil {
 		return err
 	}
 	if err := renderHAProxyConfig(ctx, a); err != nil {

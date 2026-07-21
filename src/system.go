@@ -91,6 +91,12 @@ const (
 	platformFamilyAzure  = "azure"
 	platformFamilyDebian = "debian"
 	platformFamilyRHEL   = "rhel"
+
+	sharedRuntimeLockDir     = "/run/proxyble/locks"
+	sharedHAProxyLockFile    = sharedRuntimeLockDir + "/haproxy.lock"
+	sharedNFTablesLockFile   = sharedRuntimeLockDir + "/nftables.lock"
+	sharedRuntimeLockDirMode = 0o700
+	sharedRuntimeLockMode    = 0o600
 )
 
 // errActionCancelled is returned when a user intentionally cancels a menu
@@ -240,7 +246,7 @@ func aptNonInteractiveEnv() []string {
 }
 
 func aptCommandArgs(args ...string) []string {
-	return append([]string{"-o", "Dpkg::Use-Pty=0"}, args...)
+	return append([]string{"-o", "Dpkg::Use-Pty=0", "-o", "DPkg::Lock::Timeout=120"}, args...)
 }
 
 // downloadFile fetches one installer dependency without relying on curl/wget
@@ -459,14 +465,14 @@ func readOSRelease(path string) (map[string]string, error) {
 func packageUpdate(ctx context.Context, p Platform, out io.Writer) error {
 	switch p.PackageManager {
 	case "dnf":
-		err := withPackageMemoryGuard(ctx, p, out, p.PackageManager, "--setopt=max_parallel_downloads=1", "-q", "makecache", "--timer")
+		err := withPackageMemoryGuard(ctx, p, out, p.PackageManager, "--setopt=exit_on_lock=False", "--setopt=max_parallel_downloads=1", "-q", "makecache", "--timer")
 		if err == nil {
 			return nil
 		}
 		fmt.Fprintln(out, "[NOTICE] Package metadata refresh did not complete; continuing because installs refresh metadata on demand.")
 		return nil
 	case "yum":
-		if err := withPackageMemoryGuard(ctx, p, out, p.PackageManager, "-q", "makecache", "-y"); err == nil {
+		if err := withPackageMemoryGuard(ctx, p, out, p.PackageManager, "--setopt=exit_on_lock=False", "-q", "makecache", "-y"); err == nil {
 			return nil
 		}
 		fmt.Fprintln(out, "[NOTICE] Package metadata refresh did not complete; continuing because installs refresh metadata on demand.")
@@ -484,6 +490,26 @@ func packageUpdate(ctx context.Context, p Platform, out io.Writer) error {
 	}
 }
 
+// packageMetadataSession avoids repeating an expensive repository metadata
+// refresh while one installation workflow installs multiple OS packages.
+// Failed refreshes are not cached, so a later attempt may retry safely.
+type packageMetadataSession struct {
+	refreshed bool
+}
+
+func (s *packageMetadataSession) update(ctx context.Context, p Platform, out io.Writer) error {
+	if s != nil && s.refreshed {
+		return nil
+	}
+	if err := packageUpdate(ctx, p, out); err != nil {
+		return err
+	}
+	if s != nil {
+		s.refreshed = true
+	}
+	return nil
+}
+
 // packageInstall installs one or more OS packages using the detected package
 // manager.
 func packageInstall(ctx context.Context, p Platform, out io.Writer, packages ...string) error {
@@ -492,10 +518,10 @@ func packageInstall(ctx context.Context, p Platform, out io.Writer, packages ...
 	}
 	switch p.PackageManager {
 	case "dnf":
-		args := append([]string{"--setopt=max_parallel_downloads=1", "--setopt=install_weak_deps=False", "install", "-y"}, packages...)
+		args := append([]string{"--setopt=exit_on_lock=False", "--setopt=max_parallel_downloads=1", "--setopt=install_weak_deps=False", "install", "-y"}, packages...)
 		return withPackageMemoryGuard(ctx, p, out, p.PackageManager, args...)
 	case "yum":
-		args := append([]string{"install", "-y"}, packages...)
+		args := append([]string{"--setopt=exit_on_lock=False", "install", "-y"}, packages...)
 		return withPackageMemoryGuard(ctx, p, out, p.PackageManager, args...)
 	case "tdnf":
 		args := append([]string{"install", "-y"}, packages...)
@@ -512,9 +538,9 @@ func packageInstall(ctx context.Context, p Platform, out io.Writer, packages ...
 func packageRemove(ctx context.Context, p Platform, out io.Writer, pkg string) error {
 	switch p.PackageManager {
 	case "dnf":
-		return withPackageMemoryGuard(ctx, p, out, p.PackageManager, "--setopt=max_parallel_downloads=1", "remove", "-y", pkg)
+		return withPackageMemoryGuard(ctx, p, out, p.PackageManager, "--setopt=exit_on_lock=False", "--setopt=max_parallel_downloads=1", "remove", "-y", pkg)
 	case "yum":
-		return withPackageMemoryGuard(ctx, p, out, p.PackageManager, "remove", "-y", pkg)
+		return withPackageMemoryGuard(ctx, p, out, p.PackageManager, "--setopt=exit_on_lock=False", "remove", "-y", pkg)
 	case "tdnf":
 		return runCommand(ctx, out, p.PackageManager, "remove", "-y", pkg)
 	case "apt-get":
@@ -522,6 +548,39 @@ func packageRemove(ctx context.Context, p Platform, out io.Writer, pkg string) e
 	default:
 		return fmt.Errorf("unsupported package manager: %s", p.PackageManager)
 	}
+}
+
+// packageInstalled reports whether the distribution package database currently
+// owns pkg. A normal package-manager "not installed" exit is not an error.
+func packageInstalled(ctx context.Context, p Platform, pkg string) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pkg = strings.TrimSpace(pkg)
+	if pkg == "" {
+		return false, errors.New("package name is empty")
+	}
+	var cmd *exec.Cmd
+	switch p.Family {
+	case platformFamilyDebian:
+		cmd = exec.CommandContext(ctx, "dpkg-query", "-W", "-f=${Status}", pkg)
+	case platformFamilyAmazon, platformFamilyAzure, platformFamilyRHEL:
+		cmd = exec.CommandContext(ctx, "rpm", "-q", pkg)
+	default:
+		return false, fmt.Errorf("unsupported package ownership probe for platform family: %s", p.Family)
+	}
+	out, err := cmd.Output()
+	if err == nil {
+		if p.Family == platformFamilyDebian {
+			return strings.Contains(string(out), "install ok installed"), nil
+		}
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("query package %s installation state: %w", pkg, err)
 }
 
 // memoryTotalMB returns host RAM in megabytes from /proc/meminfo.
@@ -1006,14 +1065,15 @@ func timeoutCommand(ctx context.Context, out io.Writer, seconds int, name string
 
 // lockFile obtains an exclusive advisory flock for rule-state maintenance.
 func lockFile(path string) (*os.File, error) {
-	if err := mkdirAllNoSymlink(filepath.Dir(path), 0o700); err != nil {
+	if err := mkdirOwned(filepath.Dir(path), sharedRuntimeLockDirMode, "root", "root"); err != nil {
 		return nil, err
 	}
-	_ = chmodPath(filepath.Dir(path), 0o700)
-	f, err := openFileNoFollow(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := openFileNoFollow(path, os.O_CREATE|os.O_RDWR, sharedRuntimeLockMode)
 	if err != nil {
 		return nil, err
 	}
+	_ = chownPath(path, "root", "root")
+	_ = chmodPath(path, sharedRuntimeLockMode)
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -1035,6 +1095,23 @@ func unlockFile(f *os.File) {
 	}
 	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	_ = f.Close()
+}
+
+func withHAProxyCoordinationLock(fn func() error) error {
+	return withSharedCoordinationLock(sharedHAProxyLockFile, fn)
+}
+
+func withNFTablesCoordinationLock(fn func() error) error {
+	return withSharedCoordinationLock(sharedNFTablesLockFile, fn)
+}
+
+func withSharedCoordinationLock(path string, fn func() error) error {
+	lock, err := lockFile(path)
+	if err != nil {
+		return err
+	}
+	defer unlockFile(lock)
+	return fn()
 }
 
 // findResourceRoot locates the directory that contains bundled settings,
