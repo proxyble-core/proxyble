@@ -20,7 +20,13 @@ package main
 // menu alignment. These tests are intentionally small because most UI behavior
 // depends on real TTY input.
 
-import "testing"
+import (
+	"bytes"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+)
 
 // TestDisplayWidthCountsUnicodeGlyphsAsColumns protects the ASCII-art alignment
 // math used by the Proxyble banner.
@@ -41,6 +47,27 @@ func TestConfirmOptionTextConvertsQuestionToActionLabel(t *testing.T) {
 	label, detail = confirmOptionText("Also remove Java JDK? Only choose yes if Java is not used by other software.")
 	if label != "Also remove Java JDK" || detail != "Only choose yes if Java is not used by other software." {
 		t.Fatalf("confirmOptionText detail prompt = (%q, %q)", label, detail)
+	}
+}
+
+func TestConfirmActionTextAlignsActionAndBackColumns(t *testing.T) {
+	tests := []struct {
+		label       string
+		description string
+	}{
+		{"repair", "Re-install Proxyble Core components now"},
+		{"install", "Enable RioDB analytics now"},
+		{"remove", "Continue with Proxyble teardown"},
+	}
+	for _, tt := range tests {
+		action := confirmActionText(tt.label, tt.description)
+		if got, want := strings.Index(action, tt.description), confirmMenuLabelWidth; got != want {
+			t.Fatalf("%s description column = %d, want %d in %q", tt.label, got, want, action)
+		}
+		lines := confirmMenuLines(action, "", 1)
+		if !strings.Contains(lines[len(lines)-3], action) {
+			t.Fatalf("%s confirmation row = %q, want action %q", tt.label, lines[len(lines)-3], action)
+		}
 	}
 }
 
@@ -84,5 +111,76 @@ func TestMenuTagsSupportStableChoicesAndDisplayLabels(t *testing.T) {
 func TestUninstallExitPrompt(t *testing.T) {
 	if got, want := uninstallExitPrompt(), "Press any key to exit."; got != want {
 		t.Fatalf("uninstallExitPrompt = %q, want %q", got, want)
+	}
+}
+
+func TestWizardReturnTipIsExactOnMenusAndConfirmations(t *testing.T) {
+	if got, want := wizardReturnTip, "Press ESC key to return."; got != want {
+		t.Fatalf("wizardReturnTip = %q, want %q", got, want)
+	}
+	if got, want := wizardReturnTipLine("Use Up/Down and Enter. "), "Use Up/Down and Enter. Press ESC key to return."; got != want {
+		t.Fatalf("wizardReturnTipLine = %q, want %q", got, want)
+	}
+	lines := confirmMenuLines("Continue", "", 0)
+	if got := lines[len(lines)-1]; !strings.Contains(got, wizardReturnTip) || strings.Contains(got, "Press q") {
+		t.Fatalf("confirmation footer = %q, want exact ESC return tip", got)
+	}
+	if got := lines[len(lines)-2]; !strings.Contains(got, "back            Return to previous menu") {
+		t.Fatalf("confirmation back row = %q, want consistent back option", got)
+	}
+}
+
+func TestMenuCancelChoiceReturnsOneLevelOrExitsMainMenu(t *testing.T) {
+	if got := menuCancelChoice([][2]string{{"child", ""}, {"back", ""}}); got != "back" {
+		t.Fatalf("submenu ESC choice = %q, want back", got)
+	}
+	if got := menuCancelChoice([][2]string{{"yes", ""}, {"cancel", ""}}); got != "cancel" {
+		t.Fatalf("confirmation ESC choice = %q, want cancel", got)
+	}
+	if got := menuCancelChoice([][2]string{{"config", ""}, {"exit", ""}}); got != "exit" {
+		t.Fatalf("main-menu ESC choice = %q, want exit", got)
+	}
+}
+
+func TestReadRawWizardLineEscapeReturnsWizardBack(t *testing.T) {
+	var output bytes.Buffer
+	value, err := readRawWizardLine(bytes.NewBufferString("443\x1b"), &output)
+	if value != "" {
+		t.Fatalf("value after ESC = %q, want empty", value)
+	}
+	if !errors.Is(err, errWizardBack) || !errors.Is(err, errActionCancelled) {
+		t.Fatalf("ESC error = %v, want wizard-back action cancellation", err)
+	}
+}
+
+func TestReadRawWizardLineSupportsBackspace(t *testing.T) {
+	var output bytes.Buffer
+	value, err := readRawWizardLine(bytes.NewBufferString("44\x7f3\r"), &output)
+	if err != nil {
+		t.Fatalf("readRawWizardLine error = %v", err)
+	}
+	if value != "43" {
+		t.Fatalf("edited value = %q, want 43", value)
+	}
+}
+
+func TestReadMenuKeyRecognizesLoneEscape(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte{0x1b}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	key, err := readMenuKey(r)
+	if err != nil {
+		t.Fatalf("readMenuKey error = %v", err)
+	}
+	if key != "escape" {
+		t.Fatalf("readMenuKey = %q, want escape", key)
 	}
 }

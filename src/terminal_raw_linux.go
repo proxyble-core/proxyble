@@ -31,7 +31,9 @@ import (
 
 // makeTerminalRaw disables canonical input, echo, and terminal-generated signals
 // for one terminal file, then returns a restore function that must be deferred by
-// the caller. Disabling ISIG lets raw UI screens handle Ctrl+C themselves.
+// the caller. Disabling ISIG lets raw UI screens handle Ctrl+C themselves. A
+// short read timeout lets a lone ESC byte be distinguished from an arrow-key
+// escape sequence without waiting for another keypress.
 func makeTerminalRaw(f *os.File) (func(), error) {
 	fd := f.Fd()
 	var oldState syscall.Termios
@@ -40,8 +42,8 @@ func makeTerminalRaw(f *os.File) (func(), error) {
 	}
 	newState := oldState
 	newState.Lflag &^= syscall.ECHO | syscall.ICANON | syscall.ISIG
-	newState.Cc[syscall.VMIN] = 1
-	newState.Cc[syscall.VTIME] = 0
+	newState.Cc[syscall.VMIN] = 0
+	newState.Cc[syscall.VTIME] = 1
 	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&newState))); errno != 0 {
 		return nil, errno
 	}

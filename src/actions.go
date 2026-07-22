@@ -30,6 +30,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -228,7 +229,7 @@ func reviewAndConfirmInstallInteractive(ctx context.Context, a *App, profile ins
 	if err := scrollableTextRequiredEnd(title, prompt, lines); err != nil {
 		return false, err
 	}
-	choice, err := choiceMenu("[proxyble] Installation -> Install", installAcceptPrompt(profile), installAcceptanceMenuItems(profile), "install")
+	choice, err := choiceMenu("[proxyble] Installation -> Install", installAcceptPrompt(profile), installAcceptanceMenuItems(profile), "install", 14)
 	if err != nil {
 		return false, err
 	}
@@ -250,13 +251,13 @@ func installAcceptPrompt(profile installProfile) string {
 }
 
 func installAcceptanceMenuItems(profile installProfile) [][2]string {
-	action := "Accept notice and install Proxyble Core now"
+	action := "I accept the notice. Install Proxyble Core now"
 	if profileIncludesRioDB(profile) {
-		action = "Accept notice/EULA and install Proxyble + RioDB now"
+		action = "I accept the notice/EULA. Install Proxyble + RioDB now"
 	}
 	return [][2]string{
-		{"install|" + action, ""},
-		{"cancel|Cancel", ""},
+		{"install|accept", action},
+		{"back", "Return to previous menu"},
 	}
 }
 
@@ -612,10 +613,16 @@ func configureListenerAction(ctx context.Context, a *App, args []string) error {
 				defPort = "443"
 			}
 			opts.port, err = promptPort("Listener port", firstNonEmpty(existingPort, defPort))
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if err != nil {
 				return err
 			}
 			opts.timeout, err = promptValue("Timeout (for example, 60s)", defTimeout, true)
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -641,6 +648,9 @@ func configureListenerAction(ctx context.Context, a *App, args []string) error {
 			}
 			if mode == "https" {
 				opts.certificate, opts.certificateSelfSigned, err = promptHTTPSCertificate(existingCert)
+				if errors.Is(err, errWizardBack) {
+					continue
+				}
 				if err != nil {
 					return err
 				}
@@ -702,7 +712,10 @@ func configureListenerAction(ctx context.Context, a *App, args []string) error {
 		if opts.resetActiveRules != nil {
 			reset = *opts.resetActiveRules
 		} else {
-			reset, _ = appConfirm(a, "Reset currently active rules for the new traffic mode?")
+			reset, err = appConfirm(a, "Reset currently active rules for the new traffic mode?")
+			if err != nil {
+				return err
+			}
 		}
 		if reset {
 			var ok bool
@@ -735,7 +748,11 @@ func configureListenerAction(ctx context.Context, a *App, args []string) error {
 		if err := applyHAProxyIfEnabled(ctx, a, p); err != nil {
 			return err
 		}
-		if shouldStartServices(a, opts.cli, opts.startServices) {
+		start, err := shouldStartServices(a, opts.cli, opts.startServices)
+		if err != nil {
+			return err
+		}
+		if start {
 			if err := startRuntimeServices(ctx, a); err != nil {
 				return err
 			}
@@ -1025,7 +1042,11 @@ func configureBackendAction(ctx context.Context, a *App, args []string) error {
 		if err := applyHAProxyIfEnabled(ctx, a, p); err != nil {
 			return err
 		}
-		if shouldStartServices(a, opts.cli, opts.startServices) {
+		start, err := shouldStartServices(a, opts.cli, opts.startServices)
+		if err != nil {
+			return err
+		}
+		if start {
 			if err := startRuntimeServices(ctx, a); err != nil {
 				return err
 			}
@@ -1151,23 +1172,22 @@ func validateBackendCLIOptions(o backendOptions, listenerPort, existingSecondary
 
 // shouldStartServices centralizes the final start confirmation used by both
 // listener and backend configuration.
-func shouldStartServices(a *App, cli bool, explicit *bool) bool {
+func shouldStartServices(a *App, cli bool, explicit *bool) (bool, error) {
 	if cli && explicit != nil {
-		return *explicit
+		return *explicit, nil
 	}
-	ok, _ := appConfirm(a, "Start all Proxyble services now?")
-	return ok
+	return appConfirm(a, "Start all Proxyble services now?")
 }
 
 // promptConfigRetry keeps interactive validation errors inside the wizard: the
-// operator can retry the form or cancel back to the menu without ending Proxyble.
+// operator can retry the form or return to the previous menu without ending Proxyble.
 func promptConfigRetry(title, summary string, validationErr error) (bool, error) {
 	if !isTerminal(os.Stdin) {
 		return false, validationErr
 	}
-	choice, err := choiceMenu(title, fmt.Sprintf("%s\n\n[ERROR] %v\n\nRetry input or cancel and return to menu.", summary, validationErr), [][2]string{
+	choice, err := choiceMenu(title, fmt.Sprintf("%s\n\n[ERROR] %v\n\nRetry input or return to the previous menu.", summary, validationErr), [][2]string{
 		{"retry", "Retry input"},
-		{"cancel", "Cancel and return to menu"},
+		{"back", "Return to previous menu"},
 	}, "retry")
 	if err != nil {
 		return false, err
@@ -1175,7 +1195,7 @@ func promptConfigRetry(title, summary string, validationErr error) (bool, error)
 	switch choice {
 	case "retry":
 		return true, nil
-	case "cancel", "back", "exit":
+	case "back", "cancel", "exit":
 		return false, nil
 	default:
 		return false, fmt.Errorf("unknown retry selection: %s", choice)
@@ -1189,13 +1209,13 @@ func promptMode(def string) (string, error) {
 		{"tcp", "Receiving any Layer 4 TCP traffic, including unterminated HTTPS traffic. Fewer rule options"},
 		{"http", "Receiving Layer 7 HTTP unencrypted traffic"},
 		{"https", "Receiving and terminating HTTPS TLS-encrypted traffic with a PEM certificate"},
-		{"cancel", "Cancel listener configuration"},
+		{"back", "Return to previous menu"},
 	}
 	choice, err := choiceMenu("[proxyble] Config -> Listener", "Select the traffic mode received by Proxyble.", items, def)
 	if err != nil {
 		return "", err
 	}
-	if choice == "cancel" || choice == "exit" {
+	if choice == "back" || choice == "cancel" || choice == "exit" {
 		return "", errActionCancelled
 	}
 	return normalizeTrafficMode(choice)
@@ -1240,12 +1260,14 @@ func promptHTTPSCertificate(existing string) (string, bool, error) {
 			{"ip", "Generate for current IP address (" + currentIP + ")"},
 			{"hostname", "Generate for current hostname (" + currentHostname + ")"},
 			{"fqdn", "Generate for a DNS name that points to this server"},
-			{"cancel", "Cancel listener configuration"},
+			{"back", "Return to previous menu"},
 		}, defaultChoice)
 		if err != nil {
 			return "", false, err
 		}
 		switch choice {
+		case "back":
+			return "", false, errWizardBack
 		case "cancel", "exit":
 			return "", false, errActionCancelled
 		case "ip":
@@ -1257,6 +1279,9 @@ func promptHTTPSCertificate(existing string) (string, bool, error) {
 		case "fqdn":
 			actionPage("[proxyble] Config -> Listener TLS", "HTTPS listeners require a HAProxy PEM bundle. Use an existing certificate or generate a self-signed one now.")
 			fqdn, err := promptValue("Fully qualified DNS name", "", true)
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if err != nil {
 				return "", false, err
 			}
@@ -1264,7 +1289,10 @@ func promptHTTPSCertificate(existing string) (string, bool, error) {
 			return path, true, err
 		case "provide":
 			actionPage("[proxyble] Config -> Listener TLS", "HTTPS listeners require a HAProxy PEM bundle. Use an existing certificate or generate a self-signed one now.")
-			v, err := promptValue("TLS certificate path (.pem), or type cancel", existing, true)
+			v, err := promptValue("TLS certificate path (.pem)", existing, true)
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if err != nil {
 				return "", false, err
 			}
@@ -1658,7 +1686,7 @@ func uninstallProxyble(ctx context.Context, a *App, args []string) error {
 		fmt.Println("This operation is destructive.")
 		printHR(os.Stdout, 79)
 	}
-	ok, err := appConfirm(a, "Continue with Proxyble teardown?")
+	ok, err := appConfirmAction(a, "remove", "Continue with Proxyble teardown", "Continue with Proxyble teardown?")
 	if err != nil || !ok {
 		if err != nil {
 			return err
@@ -1851,7 +1879,7 @@ func promptJavaRemoval(a *App) (bool, error) {
 	choice, err := choiceMenu("[proxyble] Installation -> Remove", "RioDB is installed.\n\nWould you like to also remove Java JDK, or keep it for other applications?", [][2]string{
 		{"Yes, remove Java.", ""},
 		{"No, keep Java.", ""},
-		{"Cancel.", ""},
+		{"back", "Return to previous menu"},
 	}, "No, keep Java.")
 	if err != nil {
 		return false, err
@@ -1861,7 +1889,7 @@ func promptJavaRemoval(a *App) (bool, error) {
 		return true, nil
 	case "No, keep Java.":
 		return false, nil
-	case "Cancel.", "back", "exit":
+	case "back", "Cancel.", "exit":
 		return false, errActionCancelled
 	default:
 		return false, fmt.Errorf("unknown Java removal selection: %s", choice)

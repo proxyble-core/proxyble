@@ -317,16 +317,12 @@ func deployablePolicies(a *App) ([]policyDefinition, error) {
 
 // policyMenuItems converts policy definitions into two-column wizard rows and
 // appends the common back row used by deploy/remove screens.
-func policyMenuItems(policies []policyDefinition, emptyBackDescription string) [][2]string {
+func policyMenuItems(policies []policyDefinition, _ string) [][2]string {
 	items := make([][2]string, 0, len(policies)+1)
 	for _, policy := range policies {
 		items = append(items, [2]string{policy.ID + "|" + policy.Name, policy.Summary})
 	}
-	backDescription := "Return and do not deploy a new policy"
-	if len(policies) == 0 && emptyBackDescription != "" {
-		backDescription = emptyBackDescription
-	}
-	items = append(items, [2]string{"back", backDescription})
+	items = append(items, [2]string{"back", "Return to previous menu"})
 	return items
 }
 
@@ -782,25 +778,30 @@ func deployPolicyInteractive(ctx context.Context, a *App) error {
 	}
 	mode, _ := a.Config.TrafficMode()
 	items := policyMenuItems(policies, "No compatible undeployed policies are available")
-	choice, err := choiceMenu("[proxyble] Policies -> Deploy", fmt.Sprintf("Policy                         Summary\nChoose policies to manage protection automatically.\nCurrent mode: %s", mode), items, "")
-	if err != nil {
-		return err
-	}
-	if choice == "back" {
-		return errActionCancelled
-	}
-	policy, ok := selectPolicyByID(policies, choice)
-	if !ok {
-		return fmt.Errorf("selected policy was not found: %s", choice)
-	}
-	ok, err = confirmPolicyDeployInteractive(policy)
-	if err != nil || !ok {
+	for {
+		choice, err := choiceMenu("[proxyble] Policies -> Deploy", fmt.Sprintf("Policy                         Summary\nChoose policies to manage protection automatically.\nCurrent mode: %s", mode), items, "")
 		if err != nil {
 			return err
 		}
-		return errActionCancelled
+		if choice == "back" {
+			return errActionCancelled
+		}
+		policy, ok := selectPolicyByID(policies, choice)
+		if !ok {
+			return fmt.Errorf("selected policy was not found: %s", choice)
+		}
+		ok, err = confirmPolicyDeployInteractive(policy)
+		if errors.Is(err, errWizardBack) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errActionCancelled
+		}
+		return deployPolicy(ctx, a, policy, false)
 	}
-	return deployPolicy(ctx, a, policy, false)
 }
 
 // confirmPolicyDeployInteractive displays the expanded policy metadata before
@@ -870,9 +871,6 @@ func viewDeployedPoliciesInteractive(ctx context.Context, a *App) error {
 			return err
 		}
 		items := policyMenuItems(policies, "No policies currently deployed")
-		if len(policies) > 0 {
-			items[len(items)-1][1] = "Return without removing any policies"
-		}
 		choice, err := choiceMenu("[proxyble] Policies -> Deployed", "Policy                         Description\nSelect a deployed policy to deactivate.", items, "")
 		if err != nil {
 			return err
@@ -886,7 +884,7 @@ func viewDeployedPoliciesInteractive(ctx context.Context, a *App) error {
 		}
 		confirmChoice, err := choiceMenu("[proxyble] Policies -> Remove", fmt.Sprintf("Remove policy %s now?", policy.Name), [][2]string{
 			{"yes|Yes", "Remove this deployed policy"},
-			{"cancel|Cancel", "Return without removing this policy"},
+			{"back", "Return to previous menu"},
 		}, "")
 		if err != nil {
 			return err

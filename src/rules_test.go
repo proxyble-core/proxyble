@@ -162,9 +162,9 @@ func TestPrepareRuleDraftNormalizesCIDRHostBits(t *testing.T) {
 	}
 }
 
-// TestResetRuleMenuItemsEndsWithAllAndCancel protects the interactive reset
+// TestResetRuleMenuItemsEndsWithAllAndBack protects the interactive reset
 // menu shape copied from the legacy bash wizard.
-func TestResetRuleMenuItemsEndsWithAllAndCancel(t *testing.T) {
+func TestResetRuleMenuItemsEndsWithAllAndBack(t *testing.T) {
 	counts := map[string]int{"DROP": 3}
 	items := resetRuleMenuItems(counts, 7)
 	if len(items) != len(knownActions)+2 {
@@ -173,8 +173,8 @@ func TestResetRuleMenuItemsEndsWithAllAndCancel(t *testing.T) {
 	if got := items[len(items)-2]; got[0] != "ALL" || got[1] != "       7" {
 		t.Fatalf("second-to-last reset item = %#v, want ALL with total count", got)
 	}
-	if got := items[len(items)-1]; got[0] != "cancel" {
-		t.Fatalf("last reset item = %#v, want cancel", got)
+	if got, want := items[len(items)-1], [2]string{"back", "Return to previous menu"}; got != want {
+		t.Fatalf("last reset item = %#v, want %#v", got, want)
 	}
 }
 

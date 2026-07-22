@@ -24,7 +24,6 @@ package main
 // with the rule agent.
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -418,6 +417,9 @@ func addRuleInteractive(ctx context.Context, a *App) error {
 		fields := map[string]string{"rule": rule}
 		target, err := promptRuleSourceTarget(rule)
 		if err != nil {
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if continueRuleAddAfterCancel() {
 				continue
 			}
@@ -425,6 +427,9 @@ func addRuleInteractive(ctx context.Context, a *App) error {
 		}
 		fields["target"] = target
 		if err := promptRuleParameters(rule, fields); err != nil {
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if continueRuleAddAfterCancel() {
 				continue
 			}
@@ -432,6 +437,9 @@ func addRuleInteractive(ctx context.Context, a *App) error {
 		}
 		expiration, err := promptRuleExpiration(rule)
 		if err != nil {
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			if continueRuleAddAfterCancel() {
 				continue
 			}
@@ -444,6 +452,9 @@ func addRuleInteractive(ctx context.Context, a *App) error {
 		}
 		ok, err := confirmRuleDraft(draft, a.AssumeYes)
 		if err != nil {
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
 			return err
 		}
 		if !ok {
@@ -468,7 +479,10 @@ func selectRuleType(c *Config) (string, error) {
 	if !supportsArrowMenu() {
 		renderRuleTypePage(c, rules, -1)
 		fmt.Fprint(os.Stderr, "\nSelect option: ")
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := readWizardLine(os.Stdin)
+		if errors.Is(err, errWizardBack) {
+			return "", nil
+		}
 		if err != nil && line == "" {
 			return "", err
 		}
@@ -543,8 +557,8 @@ Rules available for %s traffic:`, trafficModeLabel(c)))
 		printRuleOption(i == selected, rule, ruleDescriptions[rule])
 	}
 	fmt.Fprintf(os.Stderr, "  %s\n", hr(78))
-	printRuleOption(selected == len(rules), "return to Rules menu", "Go back without adding a rule.")
-	fmt.Fprintf(os.Stderr, "\n%sUse Up/Down arrows, Enter to select.%s", colorDim, colorReset)
+	printRuleOption(selected == len(rules), "back", "Return to previous menu")
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down arrows, Enter to select. "), colorReset)
 }
 
 // printRuleTableHeader prints the fixed two-column rule selector header.
@@ -584,13 +598,12 @@ func promptRuleSourceTarget(rule string) (string, error) {
 	if rule == "LIMIT_ENDPOINT_RATE" {
 		hint = "Enter one client IPv4 address. CIDR blocks are not supported for LIMIT_ENDPOINT_RATE."
 	}
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		renderRulesPage("Rule type: " + rule)
 		fmt.Fprintf(os.Stderr, "%s\n\n", hint)
-		fmt.Fprintf(os.Stderr, "%sType cancel to stop rule creation.%s\n\n", colorDim, colorReset)
+		printWizardReturnTip(os.Stderr, "")
 		fmt.Fprint(os.Stderr, "Source target: ")
-		value, err := reader.ReadString('\n')
+		value, err := readWizardLine(os.Stdin)
 		if err != nil && value == "" {
 			return "", err
 		}
@@ -604,7 +617,9 @@ func promptRuleSourceTarget(rule string) (string, error) {
 			return normalized, nil
 		}
 		fmt.Fprintf(os.Stderr, "\n[ERROR] %s\n", sentenceCaseError(err.Error()))
-		pauseAnyKey()
+		if err := pauseAnyKey(); err != nil {
+			return "", err
+		}
 	}
 }
 
@@ -645,13 +660,13 @@ func promptRuleParameters(rule string, fields map[string]string) error {
 // promptRuleParameter collects and validates one parameter such as bandwidth,
 // count, rate, or timeout.
 func promptRuleParameter(rule, label, defaultValue, helpText, validator string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		renderRulesPage("Rule type: " + rule)
 		fmt.Fprintf(os.Stderr, "%s\n\n", helpText)
-		fmt.Fprintf(os.Stderr, "%sPress Enter for default [%s], or type cancel to stop.%s\n\n", colorDim, defaultValue, colorReset)
+		fmt.Fprintf(os.Stderr, "%sPress Enter for default [%s].%s\n", colorDim, defaultValue, colorReset)
+		printWizardReturnTip(os.Stderr, "")
 		fmt.Fprintf(os.Stderr, "%s: ", label)
-		value, err := reader.ReadString('\n')
+		value, err := readWizardLine(os.Stdin)
 		if err != nil && value == "" {
 			return "", err
 		}
@@ -685,21 +700,23 @@ func promptRuleParameter(rule, label, defaultValue, helpText, validator string) 
 			}
 			fmt.Fprintln(os.Stderr, "\n[ERROR] Enter a timeout like 5, 5s, 500ms, or 1m. A plain number means seconds.")
 		}
-		pauseAnyKey()
+		if err := pauseAnyKey(); err != nil {
+			return "", err
+		}
 	}
 }
 
 // promptEndpointList collects HTTP path prefixes for LIMIT_ENDPOINT_RATE rules.
 func promptEndpointList(rule string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	defaultValue := "/login,/api/export"
 	for {
 		renderRulesPage("Rule type: " + rule)
 		fmt.Fprintln(os.Stderr, "Enter one or more HTTP path prefixes separated by commas.")
 		fmt.Fprint(os.Stderr, "Examples: /login or /login,/api/export or /mcp/tools\n\n")
-		fmt.Fprintf(os.Stderr, "%sPress Enter for default [%s], or type cancel to stop.%s\n\n", colorDim, defaultValue, colorReset)
+		fmt.Fprintf(os.Stderr, "%sPress Enter for default [%s].%s\n", colorDim, defaultValue, colorReset)
+		printWizardReturnTip(os.Stderr, "")
 		fmt.Fprint(os.Stderr, "Endpoint prefixes: ")
-		value, err := reader.ReadString('\n')
+		value, err := readWizardLine(os.Stdin)
 		if err != nil && value == "" {
 			return "", err
 		}
@@ -715,19 +732,21 @@ func promptEndpointList(rule string) (string, error) {
 			return value, nil
 		}
 		fmt.Fprintln(os.Stderr, "\n[ERROR] Enter comma-separated HTTP path prefixes with no spaces. Each prefix must start with /.")
-		pauseAnyKey()
+		if err := pauseAnyKey(); err != nil {
+			return "", err
+		}
 	}
 }
 
 // promptRuleExpiration collects a duration or permanent "none" expiration.
 func promptRuleExpiration(rule string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		renderRulesPage("Rule type: " + rule)
 		fmt.Fprint(os.Stderr, "Enter an expiration value, or leave blank for a permanent rule.\n\n")
 		fmt.Fprint(os.Stderr, "Examples for temporary rules: 10s, 30m, 1h, 1d.\n\n")
+		printWizardReturnTip(os.Stderr, "")
 		fmt.Fprint(os.Stderr, "Expiration: ")
-		value, err := reader.ReadString('\n')
+		value, err := readWizardLine(os.Stdin)
 		if err != nil && value == "" {
 			return "", err
 		}
@@ -740,7 +759,9 @@ func promptRuleExpiration(rule string) (string, error) {
 			return normalized, nil
 		}
 		fmt.Fprintln(os.Stderr, "\n[ERROR] Enter a duration like 10s, 30m, 1h, or 1d, or leave blank for permanent.")
-		pauseAnyKey()
+		if err := pauseAnyKey(); err != nil {
+			return "", err
+		}
 	}
 }
 
@@ -773,7 +794,7 @@ func printRuleSummary(draft ruleDraft) {
 func continueRuleAddAfterCancel() bool {
 	choice, err := choiceMenu("[proxyble] Rules -> Add", "Rule creation was cancelled.\n\nChoose the next rule action.", [][2]string{
 		{"add", "Add a rule"},
-		{"back", "Return to Rules menu"},
+		{"back", "Return to previous menu"},
 	}, "")
 	return err == nil && choice == "add"
 }
@@ -784,7 +805,7 @@ func selectNextRuleAction(watchFile, line string) bool {
 	prompt := fmt.Sprintf("Rule added to %s. Policy-manager will process it from that inbox.\n\nAdded rule:\n  %s\n\nChoose the next rule action.", watchFile, line)
 	choice, err := choiceMenu("[proxyble] Rules -> Add", prompt, [][2]string{
 		{"add", "Add another rule"},
-		{"back", "Return to Rules menu"},
+		{"back", "Return to previous menu"},
 	}, "")
 	return err == nil && choice == "add"
 }
@@ -817,23 +838,10 @@ func wrapWords(text string, width int) []string {
 	return lines
 }
 
-// pauseAnyKey waits for one keystroke after validation errors in raw-menu flows.
-func pauseAnyKey() {
-	if !isTerminal(os.Stdin) {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "\n%sPress any key to continue.%s", colorDim, colorReset)
-	restore, err := makeTerminalRaw(os.Stdin)
-	if err != nil {
-		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-		return
-	}
-	defer restore()
-	b, _ := readRequiredByte(os.Stdin)
-	if b == 0x03 {
-		handleInterruptRequest()
-	}
-	fmt.Fprintln(os.Stderr)
+// pauseAnyKey lets validation notices return to the form with Enter while ESC
+// abandons the form and returns to its parent menu.
+func pauseAnyKey() error {
+	return waitForWizardReturn()
 }
 
 // sentenceCaseError makes validation errors look like sentence text in prompts.
@@ -1187,6 +1195,7 @@ func checkIP(ctx context.Context, a *App, args []string) error {
 // checkIPInteractive prompts for IP addresses, lets the operator select a
 // matching rule with arrows, and removes the selected rule after confirmation.
 func checkIPInteractive(ctx context.Context, a *App) error {
+checkIPLoop:
 	for {
 		ipText, err := promptCheckIP()
 		if err != nil {
@@ -1211,25 +1220,30 @@ func checkIPInteractive(ctx context.Context, a *App) error {
 			}
 			return errActionCancelled
 		}
-		selected, action, err := selectMatchingRuleInteractive(ip.String(), matches)
-		if err != nil {
-			return err
+		for {
+			selected, action, err := selectMatchingRuleInteractive(ip.String(), matches)
+			if err != nil {
+				return err
+			}
+			switch action {
+			case "again":
+				continue checkIPLoop
+			case "back":
+				return errActionCancelled
+			}
+			ok, err := confirmCheckedRuleRemoval(selected, a)
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !ok {
+				a.Printf("[NOTICE] Rule removal cancelled.\n")
+				return errActionCancelled
+			}
+			return removeCheckedRule(ctx, a, paths, ip.String(), selected, true)
 		}
-		switch action {
-		case "again":
-			continue
-		case "back":
-			return errActionCancelled
-		}
-		ok, err := confirmCheckedRuleRemoval(selected, a)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			a.Printf("[NOTICE] Rule removal cancelled.\n")
-			return errActionCancelled
-		}
-		return removeCheckedRule(ctx, a, paths, ip.String(), selected, true)
 	}
 }
 
@@ -1332,13 +1346,13 @@ func parseCheckArgs(args []string) (map[string]string, error) {
 
 // promptCheckIP asks for one IPv4 address in the interactive check flow.
 func promptCheckIP() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		clearScreen()
 		banner(os.Stderr, "/var/log/proxyble/")
-		pageHeader(os.Stderr, "[proxyble] Rules -> Check IP", "Enter an IP address to check, or type cancel to return to Rules.")
-		fmt.Fprint(os.Stderr, "IP address or cancel: ")
-		value, err := reader.ReadString('\n')
+		pageHeader(os.Stderr, "[proxyble] Rules -> Check IP", "Enter an IP address to check.")
+		printWizardReturnTip(os.Stderr, "")
+		fmt.Fprint(os.Stderr, "IP address: ")
+		value, err := readWizardLine(os.Stdin)
 		if err != nil && value == "" {
 			return "", err
 		}
@@ -1351,7 +1365,9 @@ func promptCheckIP() (string, error) {
 			return ip.String(), nil
 		}
 		fmt.Fprintln(os.Stderr, "\n[ERROR] Enter a valid IPv4 address.")
-		pauseAnyKey()
+		if err := pauseAnyKey(); err != nil {
+			return "", err
+		}
 	}
 }
 
@@ -1488,7 +1504,7 @@ func printMatchesInteractive(a *App, ip string, matches []ruleMatch) {
 func selectNoMatchesAction(ip string) (bool, error) {
 	choice, err := choiceMenu("[proxyble] Rules -> Check IP", fmt.Sprintf("There are no rules currently impacting IP %s.", ip), [][2]string{
 		{"again", "Check another IP Address"},
-		{"back", "Return to Rules menu"},
+		{"back", "Return to previous menu"},
 	}, "")
 	if err != nil {
 		return false, err
@@ -1560,11 +1576,13 @@ func selectMatchingRuleInteractive(ip string, matches []ruleMatch) (ruleMatch, s
 // selectMatchingRuleNumbered is the portable fallback for Check IP match
 // selection when raw arrow-key input is unavailable.
 func selectMatchingRuleNumbered(ip string, matches []ruleMatch) (ruleMatch, string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		renderCheckIPMatchPage(ip, matches, -1)
 		fmt.Fprint(os.Stderr, "\nSelect option: ")
-		line, err := reader.ReadString('\n')
+		line, err := readWizardLine(os.Stdin)
+		if errors.Is(err, errWizardBack) {
+			return ruleMatch{}, "back", nil
+		}
 		if err != nil && line == "" {
 			return ruleMatch{}, "", err
 		}
@@ -1575,7 +1593,9 @@ func selectMatchingRuleNumbered(ip string, matches []ruleMatch) (ruleMatch, stri
 		n, err := strconv.Atoi(choice)
 		if err != nil || n < 1 || n > len(matches)+2 {
 			fmt.Fprintf(os.Stderr, "[ERROR] Unknown selection: %s\n", choice)
-			pauseAnyKey()
+			if err := pauseAnyKey(); err != nil {
+				return ruleMatch{}, "back", nil
+			}
 			continue
 		}
 		index := n - 1
@@ -1643,18 +1663,23 @@ func arrowCheckedRuleRemovalConfirm(prompt string) (bool, error) {
 			return false, err
 		}
 		switch key {
-		case "up", "down":
-			if selected == 0 {
-				selected = 1
-			} else {
-				selected = 0
+		case "up":
+			if selected > 0 {
+				selected--
+			}
+		case "down":
+			if selected < 1 {
+				selected++
 			}
 		case "enter":
 			clearScreen()
 			return selected == 0, nil
 		case "interrupt":
 			handleInterruptRequest()
-		case "escape", "q":
+		case "escape":
+			clearScreen()
+			return false, errWizardBack
+		case "q":
 			clearScreen()
 			return false, nil
 		default:
@@ -1667,11 +1692,13 @@ func arrowCheckedRuleRemovalConfirm(prompt string) (bool, error) {
 }
 
 func numberedCheckedRuleRemovalConfirm(prompt string) (bool, error) {
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		renderCheckedRuleRemovalConfirm(prompt, -1)
 		fmt.Fprint(os.Stderr, "\nSelect option: ")
-		line, err := reader.ReadString('\n')
+		line, err := readWizardLine(os.Stdin)
+		if errors.Is(err, errWizardBack) {
+			return false, err
+		}
 		if err != nil && len(line) == 0 {
 			return false, err
 		}
@@ -1684,7 +1711,9 @@ func numberedCheckedRuleRemovalConfirm(prompt string) (bool, error) {
 			return false, nil
 		default:
 			fmt.Fprintln(os.Stderr, "[NOTICE] Select 1 or 2.")
-			pauseAnyKey()
+			if err := pauseAnyKey(); err != nil {
+				return false, err
+			}
 		}
 	}
 }
@@ -1715,7 +1744,9 @@ func renderCheckedRuleRemovalConfirm(prompt string, selected int) {
 		fmt.Fprintln(os.Stderr, row)
 	}
 	if selected >= 0 {
-		fmt.Fprintf(os.Stderr, "\n%sUse Up/Down and Enter. Press q to cancel.%s", colorDim, colorReset)
+		fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down and Enter. "), colorReset)
+	} else {
+		printWizardReturnTip(os.Stderr, "")
 	}
 }
 
@@ -1733,8 +1764,8 @@ func renderCheckIPMatchPage(ip string, matches []ruleMatch, selected int) {
 	}
 	fmt.Fprintf(os.Stderr, "  %s\n", hr(checkIPTableWidth))
 	printCheckIPTableRow(selected == len(matches), "", "Check another IP", "", "")
-	printCheckIPTableRow(selected == len(matches)+1, "", "Return to Menu", "", "")
-	fmt.Fprintf(os.Stderr, "\n%sUse Up/Down arrows, Enter to select.%s", colorDim, colorReset)
+	printCheckIPTableRow(selected == len(matches)+1, "back", "Return to previous menu", "", "")
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down arrows, Enter to select. "), colorReset)
 }
 
 // printCheckIPTableRow prints one fixed-width row in the selectable Check IP
@@ -1855,52 +1886,59 @@ func resetRules(ctx context.Context, a *App, args []string) error {
 		a.Printf("[NOTICE] No active Proxyble rules were found.\n")
 		return nil
 	}
-	selectedCount := total
-	if ruleType == "" {
-		if assumeYes {
-			ruleType = "ALL"
-		} else {
-			selected, count, err := selectResetRuleSet(counts, total)
-			if err != nil {
-				return err
+	for {
+		selectedCount := total
+		if ruleType == "" {
+			if assumeYes {
+				ruleType = "ALL"
+			} else {
+				selected, count, err := selectResetRuleSet(counts, total)
+				if err != nil {
+					return err
+				}
+				if selected == "" {
+					a.Printf("[NOTICE] Rule reset cancelled.\n")
+					return errActionCancelled
+				}
+				ruleType = selected
+				selectedCount = count
 			}
-			if selected == "" {
-				a.Printf("[NOTICE] Rule reset cancelled.\n")
-				return errActionCancelled
-			}
-			ruleType = selected
-			selectedCount = count
 		}
-	}
-	if ruleType != "ALL" && !contains(knownActions, ruleType) {
-		return fmt.Errorf("unknown rule type for reset: %s", ruleType)
-	}
-	if ruleType != "ALL" {
-		selectedCount = counts[ruleType]
-	}
-	if selectedCount == 0 {
-		a.Printf("[NOTICE] No active %s rules were found.\n", ruleType)
-		return nil
-	}
-	targetLabel := "all active Proxyble rules"
-	if ruleType != "ALL" {
-		targetLabel = "all " + ruleType + " rules"
-	}
-	if cliMode && !assumeYes && !isTerminal(os.Stdin) {
-		return fmt.Errorf("rule reset confirmation required; re-run with --yes for non-interactive execution")
-	}
-	var ok bool
-	if a.CommandLine {
-		ok, err = commandLineConfirm(fmt.Sprintf("Reset %s?", targetLabel), assumeYes)
-	} else {
-		ok, err = confirmRuleResetKeyword(targetLabel, assumeYes)
-	}
-	if err != nil || !ok {
+		if ruleType != "ALL" && !contains(knownActions, ruleType) {
+			return fmt.Errorf("unknown rule type for reset: %s", ruleType)
+		}
+		if ruleType != "ALL" {
+			selectedCount = counts[ruleType]
+		}
+		if selectedCount == 0 {
+			a.Printf("[NOTICE] No active %s rules were found.\n", ruleType)
+			return nil
+		}
+		targetLabel := "all active Proxyble rules"
+		if ruleType != "ALL" {
+			targetLabel = "all " + ruleType + " rules"
+		}
+		if cliMode && !assumeYes && !isTerminal(os.Stdin) {
+			return fmt.Errorf("rule reset confirmation required; re-run with --yes for non-interactive execution")
+		}
+		var ok bool
+		if a.CommandLine {
+			ok, err = commandLineConfirm(fmt.Sprintf("Reset %s?", targetLabel), assumeYes)
+		} else {
+			ok, err = confirmRuleResetKeyword(targetLabel, assumeYes)
+		}
+		if errors.Is(err, errWizardBack) && !a.CommandLine && !assumeYes {
+			ruleType = ""
+			continue
+		}
 		if err != nil {
 			return err
 		}
-		a.Printf("[NOTICE] Rule reset cancelled.\n")
-		return errActionCancelled
+		if !ok {
+			a.Printf("[NOTICE] Rule reset cancelled.\n")
+			return errActionCancelled
+		}
+		break
 	}
 	cleanup, lock, err := quiesceRuleAgent(ctx, a)
 	if err != nil {
@@ -1942,9 +1980,8 @@ func confirmRuleResetKeyword(targetLabel string, assumeYes bool) (bool, error) {
 	if !isTerminal(os.Stdin) {
 		return false, fmt.Errorf("confirmation required; re-run with --yes for non-interactive execution")
 	}
-	reader := bufio.NewReader(os.Stdin)
 	renderRuleResetKeywordConfirm(targetLabel)
-	line, err := reader.ReadString('\n')
+	line, err := readWizardLine(os.Stdin)
 	if err != nil && len(line) == 0 {
 		return false, err
 	}
@@ -1960,11 +1997,12 @@ func renderRuleResetKeywordConfirm(targetLabel string) {
 	clearScreen()
 	banner(os.Stderr, "/var/log/proxyble/")
 	pageHeader(os.Stderr, "[proxyble] Rules -> Reset", resetConfirmationPrompt(targetLabel))
+	printWizardReturnTip(os.Stderr, "")
 	fmt.Fprint(os.Stderr, "Type RESET: ")
 }
 
 // selectResetRuleSet shows the interactive Rules -> Reset category menu with
-// active counts, an ALL option, and a cancellation option.
+// active counts, an ALL option, and a back option.
 func selectResetRuleSet(counts map[string]int, total int) (string, int, error) {
 	items := resetRuleMenuItems(counts, total)
 	choice, err := choiceMenu("[proxyble] Rules -> Reset", "Rules can be reset (completely cleared).\nYou can reset ALL rules, or just a set of rules of the same type.\n\nSelect a set of rules to be reset:", items, "")
@@ -1985,7 +2023,7 @@ func selectResetRuleSet(counts map[string]int, total int) (string, int, error) {
 }
 
 // resetRuleMenuItems builds the reset category menu in the same logical order as
-// the legacy bash wizard, with ALL and cancel at the bottom.
+// the legacy bash wizard, with ALL and back at the bottom.
 func resetRuleMenuItems(counts map[string]int, total int) [][2]string {
 	items := make([][2]string, 0, len(knownActions)+2)
 	for _, action := range knownActions {
@@ -1993,7 +2031,7 @@ func resetRuleMenuItems(counts map[string]int, total int) [][2]string {
 	}
 	items = append(items,
 		[2]string{"ALL", fmt.Sprintf("%8d", total)},
-		[2]string{"cancel", "Return to Rules menu"},
+		[2]string{"back", "Return to previous menu"},
 	)
 	return items
 }

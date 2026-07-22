@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -76,7 +77,7 @@ func allowListMenuItems(c *Config) [][2]string {
 	if mode, err := c.TrafficMode(); err == nil && (mode == "http" || mode == "https") {
 		items = append(items, [2]string{"endpoint", "Access to specific endpoints on the listening port will be rejected, allowing an exception list"})
 	}
-	items = append(items, [2]string{"back", "Return to main menu"})
+	items = append(items, [2]string{"back", "Return to previous menu"})
 	return items
 }
 
@@ -95,7 +96,7 @@ func runBasicAllowListMenu(ctx context.Context, a *App) error {
 			err = addBasicAllowListSourceInteractive(ctx, a)
 			a.CloseLog()
 			if err != nil {
-				if err == errActionCancelled {
+				if errors.Is(err, errActionCancelled) {
 					continue
 				}
 				return err
@@ -108,7 +109,7 @@ func runBasicAllowListMenu(ctx context.Context, a *App) error {
 			err = viewRemoveBasicAllowListSources(ctx, a)
 			a.CloseLog()
 			if err != nil {
-				if err == errActionCancelled {
+				if errors.Is(err, errActionCancelled) {
 					continue
 				}
 				return err
@@ -123,7 +124,7 @@ func basicAllowListMenuItems() [][2]string {
 	return [][2]string{
 		{"add", "Deny all requests to the listening port by default, allowing only added sources to connect"},
 		{"view-remove", "Display current basic allow-list sources and remove selected entries"},
-		{"back", "Return to Allow-list menu"},
+		{"back", "Return to previous menu"},
 	}
 }
 
@@ -142,7 +143,7 @@ func runEndpointAllowListMenu(ctx context.Context, a *App) error {
 			err = addEndpointAllowListEntriesInteractive(ctx, a)
 			a.CloseLog()
 			if err != nil {
-				if err == errActionCancelled {
+				if errors.Is(err, errActionCancelled) {
 					continue
 				}
 				return err
@@ -155,7 +156,7 @@ func runEndpointAllowListMenu(ctx context.Context, a *App) error {
 			err = viewRemoveEndpointAllowListEntries(ctx, a)
 			a.CloseLog()
 			if err != nil {
-				if err == errActionCancelled {
+				if errors.Is(err, errActionCancelled) {
 					continue
 				}
 				return err
@@ -170,7 +171,7 @@ func endpointAllowListMenuItems() [][2]string {
 	return [][2]string{
 		{"add", "Deny requests to selected endpoints by default, allowing only added source exceptions"},
 		{"view-remove", "Display current endpoint allow-list sources and remove selected entries"},
-		{"back", "Return to Allow-list menu"},
+		{"back", "Return to previous menu"},
 	}
 }
 
@@ -197,7 +198,7 @@ func addEndpointAllowListEntriesInteractive(ctx context.Context, a *App) error {
 
 func promptEndpointAllowListEndpoints() ([]string, error) {
 	for {
-		value, err := promptValue("Allowed endpoint path(s), space separated, or type cancel", "", true)
+		value, err := promptValue("Allowed endpoint path(s), space separated", "", true)
 		if err != nil {
 			return nil, err
 		}
@@ -441,7 +442,7 @@ func addBasicAllowListSourceInteractive(ctx context.Context, a *App) error {
 
 func promptBasicAllowListSource() (string, error) {
 	for {
-		value, err := promptValue("Allowed IPv4 address or CIDR block, or type cancel", "", true)
+		value, err := promptValue("Allowed IPv4 address or CIDR block", "", true)
 		if err != nil {
 			return "", err
 		}
@@ -729,7 +730,7 @@ func basicAllowListRemovalConfirmItems(source string) [][2]string {
 	}
 	return [][2]string{
 		{"yes|Yes", fmt.Sprintf("Remove %s from allow-list.", target)},
-		{"cancel|Cancel", "Leave allow-list as is."},
+		{"back", "Return to previous menu"},
 	}
 }
 
@@ -740,7 +741,7 @@ func basicAllowListSourceMenuItems(sources []string) [][2]string {
 	}
 	items = append(items,
 		[2]string{"remove-all", "Remove all sources and disable default-deny for the listening port"},
-		[2]string{"back", "Return to Basic allow-list menu"},
+		[2]string{"back", "Return to previous menu"},
 	)
 	return items
 }
@@ -892,7 +893,7 @@ func endpointAllowListRemovalConfirmItems(target string) [][2]string {
 	}
 	return [][2]string{
 		{"yes|Yes", fmt.Sprintf("Remove %s from allow-list.", target)},
-		{"cancel|Cancel", "Leave allow-list as is."},
+		{"back", "Return to previous menu"},
 	}
 }
 
@@ -906,7 +907,7 @@ func endpointAllowListEntryMenuItems(entries []endpointAllowListEntry) [][2]stri
 	}
 	items = append(items,
 		[2]string{"remove-all", "Remove all sources and disable default-deny for endpoints"},
-		[2]string{"back", "Return to Endpoint allow-list menu"},
+		[2]string{"back", "Return to previous menu"},
 	)
 	return items
 }
