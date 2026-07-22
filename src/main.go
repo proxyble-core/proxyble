@@ -381,7 +381,13 @@ func installCLI(ctx context.Context, a *App) error {
 		return fmt.Errorf("non-interactive option --yes also requires --accept-license when installing RioDB")
 	}
 	repair := isInstalled()
-	ok, err := appConfirm(a, installConfirmPrompt(opts.profile, repair))
+	confirmPrompt := installConfirmPrompt(opts.profile, repair)
+	var ok bool
+	if repair {
+		ok, err = appConfirmAction(a, "repair", installRepairMenuDescription(opts.profile), confirmPrompt)
+	} else {
+		ok, err = appConfirm(a, confirmPrompt)
+	}
 	if err != nil || !ok {
 		if err != nil {
 			return err
@@ -484,6 +490,13 @@ func installConfirmPrompt(profile installProfile, repair bool) string {
 	return "Install Proxyble plus RioDB analytics now?"
 }
 
+func installRepairMenuDescription(profile installProfile) string {
+	if profile == installProfileCore {
+		return "Re-install Proxyble Core components now"
+	}
+	return "Re-install Proxyble plus RioDB analytics now"
+}
+
 func rioDBEULAAccepted(a *App, explicit bool) bool {
 	if explicit {
 		return true
@@ -521,7 +534,7 @@ func addRioDBCLI(ctx context.Context, a *App) error {
 		a.Printf("[NOTICE] RioDB analytics is already enabled in %s.\n", defaultConfigFile)
 		return nil
 	}
-	ok, err := appConfirm(a, "Enable RioDB analytics now?")
+	ok, err := appConfirmAction(a, "install", "Enable RioDB analytics now", "Enable RioDB analytics now?")
 	if err != nil || !ok {
 		if err != nil {
 			return err
@@ -674,6 +687,9 @@ func runInteractive(ctx context.Context, a *App) error {
 func installSelectedProfileInteractive(ctx context.Context, a *App, profile installProfile) (bool, error) {
 	a.InstallProfile = profile
 	accepted, err := reviewAndConfirmInstallInteractive(ctx, a, profile)
+	if errors.Is(err, errActionCancelled) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -693,7 +709,7 @@ func installProfileMenuItems() [][2]string {
 	return [][2]string{
 		{"full|Automated protection", "(Recommended) Detect anomalies and automate rule workflows;\nProxyble Core + RioDB analytics, with an always-free RioDB tier.\n"},
 		{"core|Core only", "Control rules manually with open-source (GPLv2) Proxyble Core;\nRioDB automation can be added later.\n"},
-		{"exit|Exit", ""},
+		{"exit", "Exit this wizard"},
 	}
 }
 
@@ -791,7 +807,7 @@ func installationMenuItems(c *Config, installed bool) [][2]string {
 	if installed {
 		items = append(items, [2]string{"remove", "Uninstall proxyble and all dependencies"})
 	}
-	items = append(items, [2]string{"back", "Return to main menu"})
+	items = append(items, [2]string{"back", "Return to previous menu"})
 	return items
 }
 
@@ -903,7 +919,7 @@ func configMenuItemsForState(c *Config, servicesNeedStart bool) [][2]string {
 	}
 	items = append(items,
 		[2]string{"view", "Show configuration"},
-		[2]string{"back", "Return to main menu"},
+		[2]string{"back", "Return to previous menu"},
 	)
 	return items
 }
@@ -946,7 +962,7 @@ func runPoliciesMenu(ctx context.Context, a *App) error {
 		choice, err := menu("[proxyble] Policies", "Policies monitor traffic and automatically trigger rules.", [][2]string{
 			{"deploy", "Choose policies to manage protection automatically"},
 			{"view", "View and deactivate deployed policies"},
-			{"back", "Return to main menu"},
+			{"back", "Return to previous menu"},
 		})
 		if err != nil {
 			return err
@@ -988,7 +1004,7 @@ func runRulesMenu(ctx context.Context, a *App) error {
 			{"add", "Manually add a rule"},
 			{"check IP", "Check if an IP address is affected by a rule"},
 			{"reset", "Remove all rules currently in effect"},
-			{"back", "Return to main menu"},
+			{"back", "Return to previous menu"},
 		})
 		if err != nil {
 			return err

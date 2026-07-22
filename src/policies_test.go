@@ -23,6 +23,13 @@ import (
 	"testing"
 )
 
+func TestPolicyMenuItemsEndWithConsistentBackOption(t *testing.T) {
+	items := policyMenuItems([]policyDefinition{{ID: "test", Name: "Test policy"}}, "ignored")
+	if got, want := items[len(items)-1], [2]string{"back", "Return to previous menu"}; got != want {
+		t.Fatalf("last policy menu item = %#v, want %#v", got, want)
+	}
+}
+
 // TestParsePolicyVisibilitySupportsExplicitModesAndLegacyText ensures new
 // comma-separated Visibility headers and older prose headers normalize to the
 // same traffic-mode set.

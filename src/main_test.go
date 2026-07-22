@@ -181,18 +181,39 @@ func TestInstallProfileMenuOffersCoreFullAndExit(t *testing.T) {
 	if hasMenuTag(items, "installation!") || hasMenuTag(items, "installation") {
 		t.Fatalf("install profile gate should not include installation: %#v", items)
 	}
+	if got, want := items[len(items)-1], [2]string{"exit", "Exit this wizard"}; got != want {
+		t.Fatalf("last install profile item = %#v, want %#v", got, want)
+	}
 }
 
 func TestInstallAcceptanceMenuCombinesAcceptanceWithInstall(t *testing.T) {
-	items := installAcceptanceMenuItems(installProfileFull)
-	if len(items) != 2 {
-		t.Fatalf("installAcceptanceMenuItems length = %d, want 2", len(items))
+	tests := []struct {
+		profile     installProfile
+		description string
+	}{
+		{installProfileCore, "I accept the notice. Install Proxyble Core now"},
+		{installProfileFull, "I accept the notice/EULA. Install Proxyble + RioDB now"},
 	}
-	if !hasMenuTag(items, "install") {
-		t.Fatalf("acceptance menu should include install action: %#v", items)
-	}
-	if !strings.Contains(items[0][0], "Accept notice/EULA and install Proxyble + RioDB now") {
-		t.Fatalf("full acceptance action should accept EULA and install: %#v", items[0])
+	for _, tt := range tests {
+		items := installAcceptanceMenuItems(tt.profile)
+		if len(items) != 2 {
+			t.Fatalf("installAcceptanceMenuItems length = %d, want 2", len(items))
+		}
+		if got := menuChoiceTag(items[0][0]); got != "install" {
+			t.Fatalf("acceptance dispatch tag = %q, want install", got)
+		}
+		if label, _ := menuDisplayTag(items[0][0]); label != "accept" {
+			t.Fatalf("acceptance display label = %q, want accept", label)
+		}
+		if got := items[0][1]; got != tt.description {
+			t.Fatalf("acceptance description = %q, want %q", got, tt.description)
+		}
+		if got, want := items[len(items)-1], [2]string{"back", "Return to previous menu"}; got != want {
+			t.Fatalf("last install acceptance item = %#v, want %#v", got, want)
+		}
+		if got, want := menuLabelWidth(items, 14), 14; got != want {
+			t.Fatalf("compact acceptance label width = %d, want %d", got, want)
+		}
 	}
 }
 
@@ -230,6 +251,15 @@ func TestInstallConfirmPromptUsesRepairCopyWhenInstalled(t *testing.T) {
 	}
 	if got := installConfirmPrompt(installProfileCore, false); got != "Install Proxyble Core for manual rule enforcement now?" {
 		t.Fatalf("core install prompt = %q", got)
+	}
+}
+
+func TestInstallRepairMenuDescriptionUsesTwoColumnCopy(t *testing.T) {
+	if got, want := installRepairMenuDescription(installProfileCore), "Re-install Proxyble Core components now"; got != want {
+		t.Fatalf("core repair menu description = %q, want %q", got, want)
+	}
+	if got, want := installRepairMenuDescription(installProfileFull), "Re-install Proxyble plus RioDB analytics now"; got != want {
+		t.Fatalf("full repair menu description = %q, want %q", got, want)
 	}
 }
 
@@ -428,6 +458,9 @@ func TestMainMenuOrdersManagementAreas(t *testing.T) {
 	allowListIndex := menuTagIndex(items, "allow-list")
 	if !strings.Contains(items[allowListIndex][1], "Deny by default") {
 		t.Fatalf("allow-list description should explain deny-by-default behavior: %#v", items[allowListIndex])
+	}
+	if got, want := items[len(items)-1], [2]string{"exit", "Exit this wizard"}; got != want {
+		t.Fatalf("last main menu item = %#v, want %#v", got, want)
 	}
 }
 

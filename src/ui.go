@@ -30,6 +30,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ANSI color constants define the Proxyble terminal palette used throughout the
@@ -49,7 +50,13 @@ const (
 const (
 	minMenuBodyWidth       = 76
 	preferredMenuBodyWidth = 120
+	wizardReturnTip        = "Press ESC key to return."
+	confirmMenuLabelWidth  = 16
 )
+
+// errWizardBack distinguishes an ESC request from an explicit cancellation
+// choice while still matching errActionCancelled at top-level menu boundaries.
+var errWizardBack = fmt.Errorf("%w: return to previous wizard menu", errActionCancelled)
 
 // hr returns the blue horizontal rule used by CLI pages and logs.
 func hr(width int) string {
@@ -161,7 +168,7 @@ func printIntroText(w io.Writer, text string) {
 	}
 }
 
-// confirm asks the operator to continue or cancel. Interactive terminals get the
+// confirm asks the operator to continue or return. Interactive terminals get the
 // same arrow-key selection style as the main menus; non-interactive callers must
 // still opt in with --yes so unattended runs cannot accidentally proceed.
 func confirm(prompt string, assumeYes bool) (bool, error) {
@@ -195,6 +202,23 @@ func appConfirm(a *App, prompt string) (bool, error) {
 		assumeYes = a.AssumeYes
 	}
 	return confirm(prompt, assumeYes)
+}
+
+// appConfirmAction renders an explicit two-column action row in the wizard
+// while preserving the full question-style prompt for command-line y/N input.
+func appConfirmAction(a *App, actionLabel, actionDescription, prompt string) (bool, error) {
+	if a != nil && a.CommandLine {
+		return commandLineConfirm(prompt, a.AssumeYes)
+	}
+	assumeYes := false
+	if a != nil {
+		assumeYes = a.AssumeYes
+	}
+	return confirm(confirmActionText(actionLabel, actionDescription), assumeYes)
+}
+
+func confirmActionText(actionLabel, actionDescription string) string {
+	return fmt.Sprintf("%-*s%s", confirmMenuLabelWidth, strings.TrimSpace(actionLabel), strings.TrimSpace(actionDescription))
 }
 
 // commandLineConfirm asks one confirmation question using typed y/N input.
@@ -262,18 +286,23 @@ func arrowConfirm(actionLabel, detail string) (bool, error) {
 			return false, err
 		}
 		switch key {
-		case "up", "down":
-			if selected == 0 {
-				selected = 1
-			} else {
-				selected = 0
+		case "up":
+			if selected > 0 {
+				selected--
+			}
+		case "down":
+			if selected < 1 {
+				selected++
 			}
 		case "enter":
 			clearRenderedLines(renderedLines)
 			return selected == 0, nil
 		case "interrupt":
 			handleInterruptRequest()
-		case "escape", "q":
+		case "escape":
+			clearRenderedLines(renderedLines)
+			return false, errWizardBack
+		case "q":
 			clearRenderedLines(renderedLines)
 			return false, nil
 		default:
@@ -288,22 +317,25 @@ func arrowConfirm(actionLabel, detail string) (bool, error) {
 // numberedConfirm is the portable two-option fallback for terminals that cannot
 // provide raw arrow-key input.
 func numberedConfirm(actionLabel, detail string) (bool, error) {
-	reader := bufio.NewReader(os.Stdin)
 	for {
 		if strings.TrimSpace(detail) != "" {
 			fmt.Fprintf(os.Stderr, "%s\n\n", strings.TrimSpace(detail))
 		}
 		fmt.Fprintf(os.Stderr, "  1. %s\n", actionLabel)
-		fmt.Fprintln(os.Stderr, "  2. Cancel")
-		fmt.Fprint(os.Stderr, "\nSelect option: ")
-		line, err := reader.ReadString('\n')
+		fmt.Fprintf(os.Stderr, "  2. %-*s%s\n", confirmMenuLabelWidth, "back", "Return to previous menu")
+		printWizardReturnTip(os.Stderr, "")
+		fmt.Fprint(os.Stderr, "Select option: ")
+		line, err := readWizardLine(os.Stdin)
+		if errors.Is(err, errWizardBack) {
+			return false, err
+		}
 		if err != nil && len(line) == 0 {
 			return false, err
 		}
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "1", strings.ToLower(actionLabel):
 			return true, nil
-		case "", "2", "cancel", "q", "quit", "n", "no":
+		case "", "2", "back", "cancel", "q", "quit", "n", "no":
 			return false, nil
 		default:
 			fmt.Fprintln(os.Stderr, "[NOTICE] Select 1 or 2.")
@@ -333,7 +365,7 @@ func confirmMenuLines(actionLabel, detail string, selected int) []string {
 		}
 		lines = append(lines, "")
 	}
-	options := []string{actionLabel, "Cancel"}
+	options := []string{actionLabel, fmt.Sprintf("%-*s%s", confirmMenuLabelWidth, "back", "Return to previous menu")}
 	for i, option := range options {
 		marker := " "
 		if i == selected {
@@ -349,7 +381,7 @@ func confirmMenuLines(actionLabel, detail string, selected int) []string {
 		}
 		lines = append(lines, row)
 	}
-	lines = append(lines, colorDim+"Use Up/Down and Enter. Press q to cancel."+colorReset)
+	lines = append(lines, colorDim+wizardReturnTipLine("Use Up/Down and Enter. ")+colorReset)
 	return lines
 }
 
@@ -424,9 +456,9 @@ func confirmKeyword(prompt, keyword string, assumeYes bool) (bool, error) {
 	if !isTerminal(os.Stdin) {
 		return false, fmt.Errorf("confirmation required; re-run with --yes for non-interactive execution")
 	}
-	reader := bufio.NewReader(os.Stdin)
+	printWizardReturnTip(os.Stderr, "")
 	fmt.Fprint(os.Stderr, prompt)
-	line, err := reader.ReadString('\n')
+	line, err := readWizardLine(os.Stdin)
 	if err != nil && len(line) == 0 {
 		return false, err
 	}
@@ -439,14 +471,14 @@ func promptValue(prompt, def string, required bool) (string, error) {
 	if !isTerminal(os.Stdin) {
 		return "", fmt.Errorf("interactive input is required")
 	}
-	reader := bufio.NewReader(os.Stdin)
 	for {
+		printWizardReturnTip(os.Stderr, "")
 		if def != "" {
 			fmt.Fprintf(os.Stderr, "%s [%s]: ", prompt, def)
 		} else {
 			fmt.Fprintf(os.Stderr, "%s: ", prompt)
 		}
-		line, err := reader.ReadString('\n')
+		line, err := readWizardLine(os.Stdin)
 		if err != nil && len(line) == 0 {
 			return "", err
 		}
@@ -465,6 +497,92 @@ func promptValue(prompt, def string, required bool) (string, error) {
 	}
 }
 
+// wizardReturnTipLine keeps the final navigation sentence byte-for-byte
+// identical on every wizard page while allowing a page-specific control hint.
+func wizardReturnTipLine(prefix string) string {
+	return prefix + wizardReturnTip
+}
+
+func printWizardReturnTip(w io.Writer, prefix string) {
+	fmt.Fprintf(w, "\n%s%s%s\n\n", colorDim, wizardReturnTipLine(prefix), colorReset)
+}
+
+// readWizardLine reads an editable value while making a lone ESC immediately
+// return to the previous wizard menu. Raw mode is used on supported terminals;
+// limited-terminal fallbacks also recognize an ESC byte followed by Enter.
+func readWizardLine(f *os.File) (string, error) {
+	if isTerminal(f) {
+		restore, err := makeTerminalRaw(f)
+		if err == nil {
+			defer restore()
+			return readRawWizardLine(f, os.Stderr)
+		}
+	}
+	line, err := bufio.NewReader(f).ReadString('\n')
+	if strings.ContainsRune(line, '\x1b') {
+		return "", errWizardBack
+	}
+	if err != nil && len(line) == 0 {
+		return "", err
+	}
+	return line, nil
+}
+
+// readRawWizardLine provides the small amount of line editing needed by
+// wizard forms without introducing a terminal UI dependency.
+func readRawWizardLine(r io.Reader, w io.Writer) (string, error) {
+	value := make([]byte, 0, 64)
+	var one [1]byte
+	for {
+		n, err := r.Read(one[:])
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if f, ok := r.(*os.File); ok && isTerminal(f) {
+					continue
+				}
+			}
+			if errors.Is(err, io.EOF) && len(value) > 0 {
+				return string(value), nil
+			}
+			return "", err
+		}
+		if n == 0 {
+			continue
+		}
+		b := one[0]
+		switch b {
+		case '\r', '\n':
+			fmt.Fprintln(w)
+			return string(value), nil
+		case 0x1b:
+			fmt.Fprintln(w)
+			return "", errWizardBack
+		case 0x03:
+			handleInterruptRequest()
+		case 0x04:
+			if len(value) == 0 {
+				return "", io.EOF
+			}
+		case 0x08, 0x7f:
+			if len(value) == 0 {
+				continue
+			}
+			_, size := utf8.DecodeLastRune(value)
+			if size <= 0 {
+				size = 1
+			}
+			value = value[:len(value)-size]
+			fmt.Fprint(w, "\b \b")
+		default:
+			if b < 0x20 {
+				continue
+			}
+			value = append(value, b)
+			_, _ = w.Write(one[:])
+		}
+	}
+}
+
 // menu opens a required interactive menu without a preselected item.
 func menu(title, prompt string, items [][2]string) (string, error) {
 	if !isTerminal(os.Stdin) {
@@ -475,9 +593,9 @@ func menu(title, prompt string, items [][2]string) (string, error) {
 
 // choiceMenu selects arrow-key navigation when possible and falls back to a
 // numbered menu for limited terminals.
-func choiceMenu(title, prompt string, items [][2]string, selectedTag string) (string, error) {
+func choiceMenu(title, prompt string, items [][2]string, selectedTag string, minimumLabelWidth ...int) (string, error) {
 	if supportsArrowMenu() {
-		choice, err := arrowMenu(title, prompt, items, selectedIndex(items, selectedTag))
+		choice, err := arrowMenu(title, prompt, items, selectedIndex(items, selectedTag), minimumLabelWidth...)
 		if err == nil {
 			return choice, nil
 		}
@@ -485,7 +603,7 @@ func choiceMenu(title, prompt string, items [][2]string, selectedTag string) (st
 			return "", err
 		}
 	}
-	return numberedMenu(title, prompt, items)
+	return numberedMenu(title, prompt, items, minimumLabelWidth...)
 }
 
 // errArrowMenuUnavailable signals that the caller should use the numbered menu
@@ -498,8 +616,8 @@ func supportsArrowMenu() bool {
 	return term != "" && term != "dumb" && isTerminal(os.Stdin) && isTerminal(os.Stderr)
 }
 
-// arrowMenu renders a highlighted menu controlled by arrow keys, Enter, and q.
-func arrowMenu(title, prompt string, items [][2]string, selected int) (string, error) {
+// arrowMenu renders a highlighted menu controlled by arrow keys, Enter, and Escape.
+func arrowMenu(title, prompt string, items [][2]string, selected int, minimumLabelWidth ...int) (string, error) {
 	if len(items) == 0 {
 		return "", fmt.Errorf("menu has no items")
 	}
@@ -515,7 +633,7 @@ func arrowMenu(title, prompt string, items [][2]string, selected int) (string, e
 	defer fmt.Fprint(os.Stderr, "\033[?25h")
 
 	for {
-		renderArrowMenu(title, prompt, items, selected)
+		renderArrowMenu(title, prompt, items, selected, minimumLabelWidth...)
 		key, err := readMenuKey(os.Stdin)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -525,19 +643,19 @@ func arrowMenu(title, prompt string, items [][2]string, selected int) (string, e
 		}
 		switch key {
 		case "up":
-			if selected == 0 {
-				selected = len(items) - 1
-			} else {
+			if selected > 0 {
 				selected--
 			}
 		case "down":
-			selected = (selected + 1) % len(items)
+			if selected < len(items)-1 {
+				selected++
+			}
 		case "enter":
 			clearScreen()
 			return menuChoiceTag(items[selected][0]), nil
 		case "interrupt":
 			handleInterruptRequest()
-		case "q":
+		case "escape", "q":
 			clearScreen()
 			return menuCancelChoice(items), nil
 		}
@@ -545,12 +663,12 @@ func arrowMenu(title, prompt string, items [][2]string, selected int) (string, e
 }
 
 // renderArrowMenu draws the current highlighted menu frame.
-func renderArrowMenu(title, prompt string, items [][2]string, selected int) {
+func renderArrowMenu(title, prompt string, items [][2]string, selected int, minimumLabelWidth ...int) {
 	clearScreen()
 	banner(os.Stderr, "/var/log/proxyble/")
 	pageHeader(os.Stderr, title, prompt)
 	bodyWidth := menuBodyWidth()
-	labelWidth := menuLabelWidth(items)
+	labelWidth := menuLabelWidth(items, minimumLabelWidth...)
 	descriptionPrefixWidth := labelWidth + 6
 	descriptionWidth := menuDescriptionWrapWidth(descriptionPrefixWidth, bodyWidth)
 	continuationPrefix := strings.Repeat(" ", descriptionPrefixWidth)
@@ -598,13 +716,16 @@ func renderArrowMenu(title, prompt string, items [][2]string, selected int) {
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n%sUse Up/Down and Enter. Press q to return.%s", colorDim, colorReset)
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down and Enter. "), colorReset)
 }
 
 // menuLabelWidth returns the label column width needed to keep menu descriptions
 // aligned, including long rule names such as LIMIT_ENDPOINT_RATE.
-func menuLabelWidth(items [][2]string) int {
+func menuLabelWidth(items [][2]string, minimum ...int) int {
 	width := 18
+	if len(minimum) > 0 && minimum[0] >= 0 {
+		width = minimum[0]
+	}
 	for _, item := range items {
 		label, _ := menuDisplayTag(item[0])
 		if w := displayWidth(label); w > width {
@@ -758,6 +879,9 @@ func readRequiredByte(f *os.File) (byte, error) {
 	for {
 		n, err := f.Read(b[:])
 		if err != nil {
+			if errors.Is(err, io.EOF) && isTerminal(f) {
+				continue
+			}
 			return 0, err
 		}
 		if n == 1 {
@@ -823,14 +947,13 @@ func menuCancelChoice(items [][2]string) string {
 
 // numberedMenu is the portable fallback for terminals that cannot support raw
 // arrow-key input.
-func numberedMenu(title, prompt string, items [][2]string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
+func numberedMenu(title, prompt string, items [][2]string, minimumLabelWidth ...int) (string, error) {
 	for {
 		clearScreen()
 		banner(os.Stderr, "/var/log/proxyble/")
 		pageHeader(os.Stderr, title, prompt)
 		bodyWidth := menuBodyWidth()
-		labelWidth := menuLabelWidth(items)
+		labelWidth := menuLabelWidth(items, minimumLabelWidth...)
 		descriptionPrefixWidth := labelWidth + 8
 		descriptionWidth := menuDescriptionWrapWidth(descriptionPrefixWidth, bodyWidth)
 		for i, item := range items {
@@ -850,8 +973,13 @@ func numberedMenu(title, prompt string, items [][2]string) (string, error) {
 				fmt.Fprintf(os.Stderr, "%s%s\n", continuationPrefix, line)
 			}
 		}
-		fmt.Fprint(os.Stderr, "\nSelect option: ")
-		line, err := reader.ReadString('\n')
+		printWizardReturnTip(os.Stderr, "")
+		fmt.Fprint(os.Stderr, "Select option: ")
+		line, err := readWizardLine(os.Stdin)
+		if errors.Is(err, errWizardBack) {
+			clearScreen()
+			return menuCancelChoice(items), nil
+		}
 		if err != nil && len(line) == 0 {
 			return "", err
 		}
@@ -880,8 +1008,7 @@ func scrollableText(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		pause()
-		return nil
+		return waitForWizardReturn()
 	}
 	restore, err := makeTerminalRaw(os.Stdin)
 	if err != nil {
@@ -890,8 +1017,7 @@ func scrollableText(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		pause()
-		return nil
+		return waitForWizardReturn()
 	}
 	defer restore()
 	fmt.Fprint(os.Stderr, "\033[?25l")
@@ -936,8 +1062,7 @@ func scrollableTextRequiredEnd(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		pause()
-		return nil
+		return waitForWizardReturn()
 	}
 	restore, err := makeTerminalRaw(os.Stdin)
 	if err != nil {
@@ -946,8 +1071,7 @@ func scrollableTextRequiredEnd(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		pause()
-		return nil
+		return waitForWizardReturn()
 	}
 	defer restore()
 	fmt.Fprint(os.Stderr, "\033[?25l")
@@ -975,7 +1099,10 @@ func scrollableTextRequiredEnd(title, prompt string, lines []string) error {
 			offset = 0
 		case "end":
 			offset = maxOffset
-		case "enter", "escape", "q":
+		case "escape", "q":
+			clearScreen()
+			return errWizardBack
+		case "enter":
 			if atEnd {
 				clearScreen()
 				return nil
@@ -1011,7 +1138,8 @@ func renderScrollableText(title, prompt string, lines []string, offset int) int 
 	}
 	from := min(offset+1, total)
 	to := min(end, total)
-	fmt.Fprintf(os.Stderr, "\n%sShowing lines %d-%d of %d. Use Up/Down or PageUp/PageDown. Press q or Enter to return.%s", colorDim, from, to, len(lines), colorReset)
+	prefix := fmt.Sprintf("Showing lines %d-%d of %d. Use Up/Down or PageUp/PageDown. ", from, to, len(lines))
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine(prefix), colorReset)
 	return contentRows
 }
 
@@ -1019,9 +1147,9 @@ func renderScrollableTextRequiredEnd(title, prompt string, lines []string, offse
 	contentRows := renderScrollableText(title, prompt, lines, offset)
 	maxOffset := max(0, len(lines)-contentRows)
 	if offset >= maxOffset {
-		fmt.Fprintf(os.Stderr, "\r\033[2K%sEnd of license. Press Enter to continue.%s", colorDim, colorReset)
+		fmt.Fprintf(os.Stderr, "\r\033[2K%s%s%s", colorDim, wizardReturnTipLine("End of license. Press Enter to continue. "), colorReset)
 	} else {
-		fmt.Fprintf(os.Stderr, "\r\033[2K%sShowing license lines. Scroll to the end to continue.%s", colorDim, colorReset)
+		fmt.Fprintf(os.Stderr, "\r\033[2K%s%s%s", colorDim, wizardReturnTipLine("Showing license lines. Scroll to the end to continue. "), colorReset)
 	}
 	return contentRows
 }
@@ -1052,15 +1180,42 @@ func max(a, b int) int {
 	return b
 }
 
-// pause waits for Enter in interactive terminals so users can read action
-// results before the next screen redraw.
+// pause waits for ESC (or the legacy Enter/q shortcuts) so users can read
+// action results before returning to the previous menu.
 func pause() {
+	_ = waitForWizardReturn()
+}
+
+func waitForWizardReturn() error {
 	if !isTerminal(os.Stdin) {
-		return
+		return nil
 	}
-	fmt.Fprint(os.Stderr, "\nPress Enter to continue.")
-	reader := bufio.NewReader(os.Stdin)
-	_, _ = reader.ReadString('\n')
+	printWizardReturnTip(os.Stderr, "")
+	restore, err := makeTerminalRaw(os.Stdin)
+	if err != nil {
+		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.ContainsRune(line, '\x1b') {
+			return errWizardBack
+		}
+		return readErr
+	}
+	defer restore()
+	for {
+		key, err := readMenuKey(os.Stdin)
+		if err != nil {
+			return err
+		}
+		switch key {
+		case "escape":
+			fmt.Fprintln(os.Stderr)
+			return errWizardBack
+		case "enter", "q":
+			fmt.Fprintln(os.Stderr)
+			return nil
+		case "interrupt":
+			handleInterruptRequest()
+		}
+	}
 }
 
 func pauseAnyKeyExit() {
