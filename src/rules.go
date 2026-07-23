@@ -85,6 +85,8 @@ var ruleDefaultParam = map[string]string{
 	"TIMEOUT":             "5s",
 }
 
+const ruleDefaultExpiration = "none"
+
 // Check IP table widths match the compact legacy bash table closely enough to
 // keep selectable rows readable on standard 80-column terminals.
 const (
@@ -800,6 +802,7 @@ func promptRuleExpiration(rule string) (string, error) {
 		renderRulesPage("Rule type: " + rule)
 		fmt.Fprint(os.Stderr, "Enter an expiration value, or leave blank for a permanent rule.\n\n")
 		fmt.Fprint(os.Stderr, "Examples for temporary rules: 10s, 30m, 1h, 1d.\n\n")
+		fmt.Fprintf(os.Stderr, "%sPress Enter for default [%s].%s\n", colorDim, ruleDefaultExpiration, colorReset)
 		printWizardReturnTip(os.Stderr, "")
 		fmt.Fprint(os.Stderr, "Expiration: ")
 		value, err := readWizardLine(os.Stdin)
@@ -807,9 +810,8 @@ func promptRuleExpiration(rule string) (string, error) {
 			return "", err
 		}
 		value = strings.TrimSpace(value)
-		switch strings.ToLower(value) {
-		case "":
-			return "none", nil
+		if value == "" {
+			value = ruleDefaultExpiration
 		}
 		if normalized, err := normalizeExpiration(value); err == nil {
 			return normalized, nil

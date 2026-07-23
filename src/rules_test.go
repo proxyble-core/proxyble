@@ -16,16 +16,122 @@
 
 package main
 
-// rules_test.go covers regressions in manual rule CLI parsing and validation.
+// rules_test.go covers regressions in manual rule prompts, CLI parsing, and validation.
 // Keep these tests focused on behavior that previously broke during the bash to
 // Go conversion.
 
 import (
 	"context"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRuleParameterPromptsApplyAndDisplayDefaults(t *testing.T) {
+	tests := []struct {
+		rule      string
+		label     string
+		validator string
+	}{
+		{rule: "LIMIT_BANDWIDTH", label: "Bandwidth", validator: "bandwidth"},
+		{rule: "LIMIT_CONCURRENT", label: "Maximum concurrent connections", validator: "integer"},
+		{rule: "LIMIT_CONN_RATE", label: "Connection rate", validator: "rate"},
+		{rule: "LIMIT_ENDPOINT_RATE", label: "Endpoint request rate", validator: "rate"},
+		{rule: "TIMEOUT", label: "Backend timeout", validator: "timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rule, func(t *testing.T) {
+			defaultValue := ruleDefaultParam[tt.rule]
+			value, output, err := runRulePrompt(t, "\n", func() (string, error) {
+				return promptRuleParameter(tt.rule, tt.label, defaultValue, "Help text.", tt.validator)
+			})
+			if err != nil {
+				t.Fatalf("promptRuleParameter() error = %v", err)
+			}
+			if value != defaultValue {
+				t.Fatalf("promptRuleParameter() = %q, want default %q", value, defaultValue)
+			}
+			if !strings.Contains(output, "["+defaultValue+"]") {
+				t.Fatalf("prompt output does not display default [%s]:\n%s", defaultValue, output)
+			}
+		})
+	}
+}
+
+func TestEndpointAndExpirationPromptsApplyAndDisplayDefaults(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaultValue string
+		prompt       func() (string, error)
+	}{
+		{
+			name:         "endpoint prefixes",
+			defaultValue: "/login,/api/export",
+			prompt: func() (string, error) {
+				return promptEndpointList("LIMIT_ENDPOINT_RATE")
+			},
+		},
+		{
+			name:         "expiration",
+			defaultValue: ruleDefaultExpiration,
+			prompt: func() (string, error) {
+				return promptRuleExpiration("DROP")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, output, err := runRulePrompt(t, "\n", tt.prompt)
+			if err != nil {
+				t.Fatalf("rule prompt error = %v", err)
+			}
+			if value != tt.defaultValue {
+				t.Fatalf("rule prompt = %q, want default %q", value, tt.defaultValue)
+			}
+			if !strings.Contains(output, "["+tt.defaultValue+"]") {
+				t.Fatalf("prompt output does not display default [%s]:\n%s", tt.defaultValue, output)
+			}
+		})
+	}
+}
+
+func runRulePrompt(t *testing.T, input string, prompt func() (string, error)) (string, string, error) {
+	t.Helper()
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdinReader.Close()
+		_ = stdinWriter.Close()
+		t.Fatal(err)
+	}
+	oldStdin, oldStderr := os.Stdin, os.Stderr
+	os.Stdin, os.Stderr = stdinReader, stderrWriter
+	defer func() {
+		os.Stdin, os.Stderr = oldStdin, oldStderr
+		_ = stdinReader.Close()
+		_ = stderrReader.Close()
+	}()
+	if _, err := io.WriteString(stdinWriter, input); err != nil {
+		t.Fatal(err)
+	}
+	if err := stdinWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	value, promptErr := prompt()
+	if err := stderrWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(stderrReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value, string(output), promptErr
+}
 
 // TestParseRuleAddArgsAcceptsYesFlag ensures --rules-add accepts the global-like
 // --yes flag when invoked from interactive flows.
