@@ -402,9 +402,65 @@ func commitRule(ctx context.Context, a *App, draft ruleDraft) error {
 	if err := triggerRuleAgent(ctx, a, paths); err != nil {
 		return err
 	}
+	if err := verifyRulePersisted(paths, draft); err != nil {
+		return err
+	}
 	writeRuleAudit(paths.LogDir, "ACTION=ADD_RULE TYPE=%s TARGET=%s PARAMETER=%s ENDPOINTS=%s EXPIRATION=%s INBOX=%s MSG=\"Manual rule appended to proxyble-rule-agent inbox.\"", draft.Rule, draft.Target, draft.Parameter, draft.Endpoints, expirationLabel(draft.Expiration), paths.WatchFile)
 	a.Printf("[PASS] Rule added: %s\n", draft.Line)
 	return nil
+}
+
+// verifyRulePersisted prevents the wizard and CLI from reporting success when
+// the rule agent consumed a command but failed to apply and save its state.
+func verifyRulePersisted(paths rulePaths, draft ruleDraft) error {
+	path := paths.HAProxyState
+	switch draft.Rule {
+	case "DROP", "REJECT", "LIMIT_CONCURRENT", "LIMIT_CONN_RATE":
+		path = paths.NFTState
+	}
+	state, err := loadRuleState(path)
+	if err != nil {
+		return err
+	}
+	expectedTarget := draft.Target
+	if draft.Rule != "LIMIT_ENDPOINT_RATE" && !strings.Contains(expectedTarget, "/") {
+		expectedTarget += "/32"
+	}
+	expectedEndpoints := canonicalEndpointList(draft.Endpoints)
+	expectedDuration := draft.Expiration
+	if expectedDuration == "none" {
+		expectedDuration = ""
+	}
+	for key, policy := range state.Rules {
+		target := firstNonEmpty(valueString(policy["ip"]), key)
+		if target != expectedTarget ||
+			strings.ToUpper(valueString(policy["action"])) != draft.Rule ||
+			valueString(policy["parameter"]) != draft.Parameter ||
+			canonicalEndpointList(valueString(policy["endpoints"])) != expectedEndpoints ||
+			valueString(policy["duration"]) != expectedDuration ||
+			!policyActive(policy) {
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("rule agent did not persist active %s rule for %s in %s", draft.Rule, draft.Target, path)
+}
+
+func canonicalEndpointList(value string) string {
+	if value == "" {
+		return ""
+	}
+	seen := map[string]bool{}
+	var endpoints []string
+	for _, endpoint := range strings.Split(value, ",") {
+		endpoint = strings.TrimSpace(endpoint)
+		if endpoint != "" && !seen[endpoint] {
+			seen[endpoint] = true
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	sort.Strings(endpoints)
+	return strings.Join(endpoints, ",")
 }
 
 // addRuleInteractive runs the multi-page Rules -> Add wizard.
@@ -1025,11 +1081,11 @@ func validEndpointList(v string) bool {
 		return false
 	}
 	for _, part := range strings.Split(v, ",") {
-		if !strings.HasPrefix(part, "/") || part == "" {
+		if !strings.HasPrefix(part, "/") || part == "/" {
 			return false
 		}
 		for _, r := range part {
-			if strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~/%:@+-", r) {
+			if strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~%!$&'()*+;=:@/-", r) {
 				continue
 			}
 			return false

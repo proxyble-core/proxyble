@@ -1195,8 +1195,9 @@ ExecStart=%s %s
 User=root
 Group=root
 UMask=0077
-RuntimeDirectory=proxyble-rule-agent
+RuntimeDirectory=proxyble-rule-agent proxyble/locks
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -1218,6 +1219,8 @@ ReadWritePaths=%s
 ReadWritePaths=/var/lib/proxyble-rule-agent
 ReadWritePaths=/var/log/proxyble-rule-agent
 ReadWritePaths=%s
+ReadWritePaths=/run/proxyble/locks
+ReadWritePaths=/etc/haproxy/maps
 
 [Install]
 WantedBy=multi-user.target

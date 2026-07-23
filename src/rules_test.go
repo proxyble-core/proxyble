@@ -162,6 +162,82 @@ func TestPrepareRuleDraftNormalizesCIDRHostBits(t *testing.T) {
 	}
 }
 
+func TestVerifyRulePersistedForEveryRuleType(t *testing.T) {
+	dir := t.TempDir()
+	paths := rulePaths{
+		NFTState:     filepath.Join(dir, "rule_state_nft.json"),
+		HAProxyState: filepath.Join(dir, "rule_state_haproxy.json"),
+	}
+	nftState := stateFile{Rules: map[string]map[string]any{}, Extra: map[string]any{}}
+	haState := stateFile{Rules: map[string]map[string]any{}, Extra: map[string]any{}}
+	drafts := []ruleDraft{
+		{Rule: "BUSY_DEFLECTION", Target: "192.0.2.1", Expiration: "none"},
+		{Rule: "DROP", Target: "192.0.2.2", Expiration: "none"},
+		{Rule: "LIMIT_BANDWIDTH", Target: "192.0.2.3", Parameter: "10mb", Expiration: "none"},
+		{Rule: "LIMIT_CONCURRENT", Target: "192.0.2.4", Parameter: "50", Expiration: "none"},
+		{Rule: "LIMIT_CONN_RATE", Target: "192.0.2.5", Parameter: "25/second", Expiration: "none"},
+		{Rule: "LIMIT_ENDPOINT_RATE", Target: "192.0.2.6", Parameter: "10/second", Endpoints: "/login,/api/export", Expiration: "none"},
+		{Rule: "LIMIT_RATE_SLOW", Target: "192.0.2.7", Expiration: "none"},
+		{Rule: "REJECT", Target: "192.0.2.8", Expiration: "none"},
+		{Rule: "TIMEOUT", Target: "192.0.2.9", Parameter: "5s", Expiration: "none"},
+	}
+	if len(drafts) != len(knownActions) {
+		t.Fatalf("test drafts cover %d rules, want all %d known actions", len(drafts), len(knownActions))
+	}
+	for _, draft := range drafts {
+		target := draft.Target
+		if draft.Rule != "LIMIT_ENDPOINT_RATE" {
+			target += "/32"
+		}
+		policy := map[string]any{
+			"ip":        target,
+			"action":    draft.Rule,
+			"parameter": draft.Parameter,
+		}
+		if draft.Endpoints != "" {
+			policy["endpoints"] = []any{"/api/export", "/login"}
+		}
+		switch draft.Rule {
+		case "DROP", "REJECT", "LIMIT_CONCURRENT", "LIMIT_CONN_RATE":
+			nftState.Rules[target] = policy
+		default:
+			haState.Rules[target] = policy
+		}
+	}
+	if err := saveRuleState(paths.NFTState, nftState); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveRuleState(paths.HAProxyState, haState); err != nil {
+		t.Fatal(err)
+	}
+	for _, draft := range drafts {
+		t.Run(draft.Rule, func(t *testing.T) {
+			if err := verifyRulePersisted(paths, draft); err != nil {
+				t.Fatalf("verifyRulePersisted() error = %v", err)
+			}
+		})
+	}
+
+	missing := drafts[len(drafts)-1]
+	missing.Target = "198.51.100.10"
+	if err := verifyRulePersisted(paths, missing); err == nil {
+		t.Fatal("verifyRulePersisted() should reject a rule missing from agent state")
+	}
+}
+
+func TestValidEndpointListMatchesRuleAgentContract(t *testing.T) {
+	for _, value := range []string{"/login", "/api/export,/users/@me", "/price/$value;v=1"} {
+		if !validEndpointList(value) {
+			t.Fatalf("validEndpointList(%q) = false, want true", value)
+		}
+	}
+	for _, value := range []string{"", "/", "login", "/search?q=test", "/path#fragment", "/one,,/two"} {
+		if validEndpointList(value) {
+			t.Fatalf("validEndpointList(%q) = true, want false", value)
+		}
+	}
+}
+
 // TestResetRuleMenuItemsEndsWithAllAndBack protects the interactive reset
 // menu shape copied from the legacy bash wizard.
 func TestResetRuleMenuItemsEndsWithAllAndBack(t *testing.T) {

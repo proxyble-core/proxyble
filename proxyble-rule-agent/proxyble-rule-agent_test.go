@@ -89,6 +89,7 @@ func TestParseSampleRules(t *testing.T) {
 	}{
 		{"limit_bandwidth 192.0.40.85 15mb 10s", ActionLimitBandwidth, SystemHAProxy, "192.0.40.85/32", "15mb", "10s"},
 		{"LIMIT_BANDWIDTH 192.0.105.0/24 10mb", ActionLimitBandwidth, SystemHAProxy, "192.0.105.0/24", "10mb", ""},
+		{"LIMIT_BANDWIDTH 192.0.106.0/24 1gb", ActionLimitBandwidth, SystemHAProxy, "192.0.106.0/24", "1gb", ""},
 		{"drop 192.0.81.141", ActionDrop, SystemNFTables, "192.0.81.141/32", "", ""},
 		{"DROP 192.0.166.0/24 10s", ActionDrop, SystemNFTables, "192.0.166.0/24", "", "10s"},
 		{"reject 192.0.69.0/24 10s", ActionReject, SystemNFTables, "192.0.69.0/24", "", "10s"},
@@ -99,6 +100,7 @@ func TestParseSampleRules(t *testing.T) {
 		{"LIMIT_CONN_RATE 192.0.216.0/24 20/second", ActionLimitConnRate, SystemNFTables, "192.0.216.0/24", "20/second", ""},
 		{"timeout 192.0.132.87 5s 10s", ActionTimeout, SystemHAProxy, "192.0.132.87/32", "5s", "10s"},
 		{"TIMEOUT 192.0.221.0/24 10s", ActionTimeout, SystemHAProxy, "192.0.221.0/24", "10s", ""},
+		{"TIMEOUT 192.0.222.0/24 500ms", ActionTimeout, SystemHAProxy, "192.0.222.0/24", "500ms", ""},
 		{"limit_rate_slow 192.0.29.43 10s", ActionLimitRateSlow, SystemHAProxy, "192.0.29.43/32", "", "10s"},
 		{"LIMIT_RATE_SLOW 192.0.91.0/24", ActionLimitRateSlow, SystemHAProxy, "192.0.91.0/24", "", ""},
 		{"busy_deflection 192.0.28.210 10s", ActionBusyDeflection, SystemHAProxy, "192.0.28.210/32", "", "10s"},

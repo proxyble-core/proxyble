@@ -257,9 +257,10 @@ type State struct {
 
 // durationRegex matches input like "10s", "5m", "1h", "2d"
 var durationRegex = regexp.MustCompile(`^([0-9]+)([smhd])$`)
+var timeoutRegex = regexp.MustCompile(`^[0-9]+(ms|s|m|h|d)$`)
 var positiveIntRegex = regexp.MustCompile(`^[1-9][0-9]*$`)
 var connRateRegex = regexp.MustCompile(`^([1-9][0-9]*)/(s|sec|second|m|min|minute|h|hour|d|day)$`)
-var bandwidthRegex = regexp.MustCompile(`^([1-9][0-9]*)(b|byte|bytes|kb|kbyte|kbytes|mb|mbyte|mbytes)(?:/(s|sec|second|m|min|minute|h|hour|d|day))?$`)
+var bandwidthRegex = regexp.MustCompile(`^([1-9][0-9]*)(b|byte|bytes|kb|kbyte|kbytes|mb|mbyte|mbytes|gb|gbyte|gbytes)(?:/(s|sec|second|m|min|minute|h|hour|d|day))?$`)
 var endpointPathRegex = regexp.MustCompile(`^/[A-Za-z0-9._~%!$&'()*+;=:@/-]+$`)
 
 func main() {
@@ -1041,7 +1042,7 @@ func parseDuration(input string, now time.Time) (time.Time, bool) {
 
 func normalizeDurationValue(input string) (string, error) {
 	value := strings.ToLower(input)
-	if !durationRegex.MatchString(value) {
+	if !timeoutRegex.MatchString(value) {
 		return "", fmt.Errorf("invalid duration %q", input)
 	}
 	return value, nil
@@ -1160,6 +1161,8 @@ func normalizeBandwidthUnit(unit string) string {
 		return "kb"
 	case "mb", "mbyte", "mbytes":
 		return "mb"
+	case "gb", "gbyte", "gbytes":
+		return "gb"
 	}
 	return ""
 }
