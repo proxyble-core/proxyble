@@ -31,6 +31,8 @@ import (
 	"strings"
 )
 
+const proxybleVersion = "2026-6"
+
 // actionAliases maps all accepted CLI spellings to the canonical action names
 // used by runCLIAction. Keep compatibility aliases here so older scripts and
 // documentation can continue invoking the single Go binary.
@@ -79,6 +81,10 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	if app.ShowVersion {
+		fmt.Println(proxybleVersion)
+		return
 	}
 	if help {
 		if app.Action != "" {
@@ -162,6 +168,9 @@ func parseGlobalArgs(args []string) (*App, bool, error) {
 		switch arg {
 		case "-v", "--verbose":
 			app.Verbose = true
+		case "-V", "--version":
+			app.CommandLine = true
+			app.ShowVersion = true
 		case "-y", "--yes":
 			app.CommandLine = true
 			app.AssumeYes = true
@@ -193,7 +202,7 @@ func parseGlobalArgs(args []string) (*App, bool, error) {
 			}
 		}
 	}
-	if app.CommandLine && app.Action == "" && !help {
+	if app.CommandLine && app.Action == "" && !help && !app.ShowVersion {
 		return nil, false, fmt.Errorf("[ERROR] Command-line flags require an action. Run proxyble --help to list actions")
 	}
 	if app.Action == "--installation-add-riodb" && app.AssumeYes && !contains(app.Args, "--accept-license") {
@@ -1062,6 +1071,7 @@ Global flags:
   -y, --yes       Accept confirmations for the selected action.
   -s, --silent    Print nothing to the terminal.
   -v, --verbose   Print detailed action logs to the terminal.
+  -V, --version   Print the Proxyble version and exit.
   -h, --help      Print this help, or action help when used with an action.
 
 Actions:

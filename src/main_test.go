@@ -47,6 +47,26 @@ func TestParseGlobalArgsNonVerboseFlagRequiresAction(t *testing.T) {
 	}
 }
 
+func TestParseGlobalArgsVersionFlagsExitWithoutAction(t *testing.T) {
+	for _, flag := range []string{"--version", "-V"} {
+		t.Run(flag, func(t *testing.T) {
+			app, help, err := parseGlobalArgs([]string{flag})
+			if err != nil {
+				t.Fatalf("parseGlobalArgs returned error: %v", err)
+			}
+			if help {
+				t.Fatalf("help should be false")
+			}
+			if !app.ShowVersion {
+				t.Fatalf("%s should request version output", flag)
+			}
+			if app.Action != "" {
+				t.Fatalf("action = %q, want empty", app.Action)
+			}
+		})
+	}
+}
+
 func TestParseGlobalArgsActionForcesCommandLineMode(t *testing.T) {
 	app, help, err := parseGlobalArgs([]string{"--config-listener"})
 	if err != nil {

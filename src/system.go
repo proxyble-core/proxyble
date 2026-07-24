@@ -48,6 +48,7 @@ type App struct {
 	Verbose                  bool
 	AssumeYes                bool
 	Silent                   bool
+	ShowVersion              bool
 	CommandLine              bool
 	AcceptedLicense          bool
 	AcceptedRioDBEULA        bool

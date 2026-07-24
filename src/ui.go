@@ -95,7 +95,7 @@ func banner(w io.Writer, logPath string) {
 	line(colorBlueDark, "     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚══════╝")
 	line(colorBlueDark, "")
 	line(colorBlueDark, "      Real-time API protection for the agent-driven web.")
-	line(colorBlueDark, "      [proxyble] Version 2026-6        log:"+logPath)
+	line(colorBlueDark, "      [proxyble] Version "+proxybleVersion+"        log:"+logPath)
 	fmt.Fprintf(w, "%s╰%s╯%s\n", colorBlueLight, strings.Repeat("─", width), colorReset)
 }
 
