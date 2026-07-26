@@ -145,10 +145,8 @@ if [[ "$riodb_archive_path" == /* || "$riodb_archive_path" == *..* ]]; then
     exit 1
 fi
 
-if [[ -e /usr/local/bin/proxyble ]]; then
-    echo "[INFO] Updating active /usr/local/bin/proxyble binary"
-    sudo install -o root -g root -m 755 "$STAGED_PROXYBLE" /usr/local/bin/proxyble
-fi
+echo "[INFO] Installing active /usr/local/bin/proxyble binary"
+sudo install -o root -g root -m 755 "$STAGED_PROXYBLE" /usr/local/bin/proxyble
 
 if [[ -e /usr/local/bin/proxyble-rule-agent ]]; then
     echo "[INFO] Updating active /usr/local/bin/proxyble-rule-agent binary"
@@ -173,4 +171,4 @@ else
 fi
 
 echo "to run proxyble, type:"
-echo "sudo /opt/proxyble/proxyble"
+echo "sudo proxyble"

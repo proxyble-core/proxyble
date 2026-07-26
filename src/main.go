@@ -31,7 +31,7 @@ import (
 	"strings"
 )
 
-const proxybleVersion = "2026-6"
+const proxybleVersion = "2026-7.1"
 
 // actionAliases maps all accepted CLI spellings to the canonical action names
 // used by runCLIAction. Keep compatibility aliases here so older scripts and
