@@ -1993,7 +1993,10 @@ func resetRules(ctx context.Context, a *App, args []string) error {
 			return err
 		}
 		if !ok {
-			a.Printf("[NOTICE] Rule reset cancelled.\n")
+			a.Printf("[NOTICE] Confirmation did not match RESET. Rule reset cancelled; no rules were reset.\n")
+			if !a.CommandLine && !assumeYes {
+				pause()
+			}
 			return errActionCancelled
 		}
 		break
