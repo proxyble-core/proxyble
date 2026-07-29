@@ -594,9 +594,15 @@ func menu(title, prompt string, items [][2]string) (string, error) {
 // choiceMenu selects arrow-key navigation when possible and falls back to a
 // numbered menu for limited terminals.
 func choiceMenu(title, prompt string, items [][2]string, selectedTag string, minimumLabelWidth ...int) (string, error) {
+	if selectedTag == "" {
+		selectedTag = rememberedMenuSelections[title]
+	}
 	if supportsArrowMenu() {
 		choice, err := arrowMenu(title, prompt, items, selectedIndex(items, selectedTag), minimumLabelWidth...)
 		if err == nil {
+			if choice != menuCancelChoice(items) {
+				rememberedMenuSelections[title] = choice
+			}
 			return choice, nil
 		}
 		if !errors.Is(err, errArrowMenuUnavailable) {
@@ -609,6 +615,8 @@ func choiceMenu(title, prompt string, items [][2]string, selectedTag string, min
 // errArrowMenuUnavailable signals that the caller should use the numbered menu
 // fallback instead of treating raw terminal setup as fatal.
 var errArrowMenuUnavailable = errors.New("arrow menu unavailable")
+
+var rememberedMenuSelections = map[string]string{}
 
 // supportsArrowMenu reports whether raw-key menus are likely to work.
 func supportsArrowMenu() bool {
