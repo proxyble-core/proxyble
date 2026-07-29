@@ -884,7 +884,7 @@ func viewDeployedPoliciesInteractive(ctx context.Context, a *App) error {
 		}
 		confirmChoice, err := choiceMenu("[proxyble] Policies -> Remove", fmt.Sprintf("Remove policy %s now?", policy.Name), [][2]string{
 			{"yes|Yes", "Remove this deployed policy"},
-			{"back", "Return to previous menu"},
+			{"cancel", "Do not remove this policy"},
 		}, "")
 		if err != nil {
 			return err

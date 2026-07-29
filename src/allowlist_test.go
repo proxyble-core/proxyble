@@ -196,11 +196,11 @@ func TestBasicAllowListRemovalConfirmItems(t *testing.T) {
 	if !strings.Contains(items[0][1], "Remove 203.0.113.25 from allow-list.") {
 		t.Fatalf("single-source confirmation description = %q", items[0][1])
 	}
-	if got, want := menuChoiceTag(items[1][0]), "back"; got != want {
+	if got, want := menuChoiceTag(items[1][0]), "cancel"; got != want {
 		t.Fatalf("second confirmation choice = %q, want %q", got, want)
 	}
-	if got, want := items[1][1], "Return to previous menu"; got != want {
-		t.Fatalf("back confirmation description = %q, want %q", got, want)
+	if got, want := items[1][1], "Do not remove from the allow-list"; got != want {
+		t.Fatalf("cancel confirmation description = %q, want %q", got, want)
 	}
 
 	items = basicAllowListRemovalConfirmItems("ALL")
@@ -340,11 +340,11 @@ func TestEndpointAllowListRemovalConfirmItems(t *testing.T) {
 	if !strings.Contains(items[0][1], "Remove 203.0.113.25 /api from allow-list.") {
 		t.Fatalf("single-entry confirmation description = %q", items[0][1])
 	}
-	if got, want := menuChoiceTag(items[1][0]), "back"; got != want {
+	if got, want := menuChoiceTag(items[1][0]), "cancel"; got != want {
 		t.Fatalf("second confirmation choice = %q, want %q", got, want)
 	}
-	if got, want := items[1][1], "Return to previous menu"; got != want {
-		t.Fatalf("back confirmation description = %q, want %q", got, want)
+	if got, want := items[1][1], "Do not remove from the allow-list"; got != want {
+		t.Fatalf("cancel confirmation description = %q, want %q", got, want)
 	}
 
 	items = endpointAllowListRemovalConfirmItems("ALL")

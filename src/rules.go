@@ -615,8 +615,8 @@ Rules available for %s traffic:`, trafficModeLabel(c)))
 		printRuleOption(i == selected, rule, ruleDescriptions[rule])
 	}
 	fmt.Fprintf(os.Stderr, "  %s\n", hr(78))
-	printRuleOption(selected == len(rules), "back", "Return to previous menu")
-	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down arrows, Enter to select. "), colorReset)
+	printRuleOption(selected == len(rules), "Back", "Return to previous menu")
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, navigationMenuTip, colorReset)
 }
 
 // printRuleTableHeader prints the fixed two-column rule selector header.
@@ -896,10 +896,9 @@ func wrapWords(text string, width int) []string {
 	return lines
 }
 
-// pauseAnyKey lets validation notices return to the form with Enter while ESC
-// abandons the form and returns to its parent menu.
+// pauseAnyKey lets validation notices return to the form with any key.
 func pauseAnyKey() error {
-	return waitForWizardReturn()
+	return waitForAnyKey()
 }
 
 // sentenceCaseError makes validation errors look like sentence text in prompts.
@@ -1780,7 +1779,7 @@ func renderCheckedRuleRemovalConfirm(prompt string, selected int) {
 	clearScreen()
 	banner(os.Stderr, "/var/log/proxyble/")
 	pageHeader(os.Stderr, "[proxyble] Rules", prompt)
-	options := []string{"Yes", "No"}
+	options := []string{"Yes", "Cancel"}
 	for i, option := range options {
 		if selected < 0 {
 			fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, option)
@@ -1802,9 +1801,9 @@ func renderCheckedRuleRemovalConfirm(prompt string, selected int) {
 		fmt.Fprintln(os.Stderr, row)
 	}
 	if selected >= 0 {
-		fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down and Enter. "), colorReset)
+		fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, confirmationMenuTip, colorReset)
 	} else {
-		printWizardReturnTip(os.Stderr, "")
+		printWizardTip(os.Stderr, confirmationMenuTip)
 	}
 }
 
@@ -1822,8 +1821,8 @@ func renderCheckIPMatchPage(ip string, matches []ruleMatch, selected int) {
 	}
 	fmt.Fprintf(os.Stderr, "  %s\n", hr(checkIPTableWidth))
 	printCheckIPTableRow(selected == len(matches), "", "Check another IP", "", "")
-	printCheckIPTableRow(selected == len(matches)+1, "back", "Return to previous menu", "", "")
-	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down arrows, Enter to select. "), colorReset)
+	printCheckIPTableRow(selected == len(matches)+1, "Back", "Return to previous menu", "", "")
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, navigationMenuTip, colorReset)
 }
 
 // printCheckIPTableRow prints one fixed-width row in the selectable Check IP

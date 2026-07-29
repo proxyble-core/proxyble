@@ -50,7 +50,7 @@ func TestConfirmOptionTextConvertsQuestionToActionLabel(t *testing.T) {
 	}
 }
 
-func TestConfirmActionTextAlignsActionAndBackColumns(t *testing.T) {
+func TestConfirmActionTextAlignsConfirmationColumns(t *testing.T) {
 	tests := []struct {
 		label       string
 		description string
@@ -91,6 +91,11 @@ func TestMenuTagsSupportStableChoicesAndDisplayLabels(t *testing.T) {
 	if got := menuChoiceTag("full|Automated protection!"); got != "full" {
 		t.Fatalf("menuChoiceTag = %q, want full", got)
 	}
+	for tag, want := range map[string]string{"back": "Back", "cancel": "Cancel", "exit": "Exit"} {
+		if label, _ := menuDisplayTag(tag); label != want {
+			t.Fatalf("menuDisplayTag(%q) = %q, want %q", tag, label, want)
+		}
+	}
 	lines := menuDescriptionLines("First line\n  Second line  ")
 	if len(lines) != 2 || lines[0] != "First line" || lines[1] != "Second line" {
 		t.Fatalf("menuDescriptionLines trimmed multi-line description: %#v", lines)
@@ -114,19 +119,28 @@ func TestUninstallExitPrompt(t *testing.T) {
 	}
 }
 
-func TestWizardReturnTipIsExactOnMenusAndConfirmations(t *testing.T) {
-	if got, want := wizardReturnTip, "Press ESC key to return."; got != want {
-		t.Fatalf("wizardReturnTip = %q, want %q", got, want)
+func TestWizardTipsAreExactForEachInteraction(t *testing.T) {
+	if got, want := navigationMenuTip, "Press Up/Down and Enter to make a selection. Press Esc to go back to previous menu."; got != want {
+		t.Fatalf("navigationMenuTip = %q, want %q", got, want)
 	}
-	if got, want := wizardReturnTipLine("Use Up/Down and Enter. "), "Use Up/Down and Enter. Press ESC key to return."; got != want {
-		t.Fatalf("wizardReturnTipLine = %q, want %q", got, want)
+	if got, want := confirmationMenuTip, "Press Up/Down and Enter to make a selection. Press Esc to cancel this action."; got != want {
+		t.Fatalf("confirmationMenuTip = %q, want %q", got, want)
+	}
+	if got, want := continueTip, "Press any key to continue"; got != want {
+		t.Fatalf("continueTip = %q, want %q", got, want)
 	}
 	lines := confirmMenuLines("Continue", "", 0)
-	if got := lines[len(lines)-1]; !strings.Contains(got, wizardReturnTip) || strings.Contains(got, "Press q") {
-		t.Fatalf("confirmation footer = %q, want exact ESC return tip", got)
+	if got := lines[len(lines)-1]; !strings.Contains(got, confirmationMenuTip) {
+		t.Fatalf("confirmation footer = %q, want exact cancellation tip", got)
 	}
-	if got := lines[len(lines)-2]; !strings.Contains(got, "back            Return to previous menu") {
-		t.Fatalf("confirmation back row = %q, want consistent back option", got)
+	if got := lines[len(lines)-2]; !strings.Contains(got, "Cancel") {
+		t.Fatalf("confirmation cancel row = %q, want Cancel", got)
+	}
+	if got := menuSelectionTip([][2]string{{"next", ""}, {"back", ""}}); got != navigationMenuTip {
+		t.Fatalf("navigation menu tip = %q", got)
+	}
+	if got := menuSelectionTip([][2]string{{"yes", ""}, {"cancel", ""}}); got != confirmationMenuTip {
+		t.Fatalf("confirmation menu tip = %q", got)
 	}
 }
 
