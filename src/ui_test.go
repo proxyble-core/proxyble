@@ -164,23 +164,24 @@ func TestReadRawWizardLineSupportsBackspace(t *testing.T) {
 	}
 }
 
-func TestReadMenuKeyRecognizesLoneEscape(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte{0x1b}); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	key, err := readMenuKey(r)
-	if err != nil {
-		t.Fatalf("readMenuKey error = %v", err)
-	}
-	if key != "escape" {
-		t.Fatalf("readMenuKey = %q, want escape", key)
+func TestReadMenuKeyRecognizesEscapeKeys(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  string
+	}{{"\x1b", "escape"}, {"\x1b[C", "right"}, {"\x1b[D", "left"}} {
+		f, err := os.CreateTemp(t.TempDir(), "key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString(tt.input); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		if key, err := readMenuKey(f); err != nil || key != tt.want {
+			t.Fatalf("readMenuKey(%q) = %q, %v; want %q, nil", tt.input, key, err, tt.want)
+		}
 	}
 }
