@@ -730,7 +730,7 @@ func basicAllowListRemovalConfirmItems(source string) [][2]string {
 	}
 	return [][2]string{
 		{"yes|Yes", fmt.Sprintf("Remove %s from allow-list.", target)},
-		{"back", "Return to previous menu"},
+		{"cancel", "Do not remove from the allow-list"},
 	}
 }
 
@@ -893,7 +893,7 @@ func endpointAllowListRemovalConfirmItems(target string) [][2]string {
 	}
 	return [][2]string{
 		{"yes|Yes", fmt.Sprintf("Remove %s from allow-list.", target)},
-		{"back", "Return to previous menu"},
+		{"cancel", "Do not remove from the allow-list"},
 	}
 }
 

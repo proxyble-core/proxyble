@@ -228,7 +228,7 @@ func TestInstallAcceptanceMenuCombinesAcceptanceWithInstall(t *testing.T) {
 		if got := items[0][1]; got != tt.description {
 			t.Fatalf("acceptance description = %q, want %q", got, tt.description)
 		}
-		if got, want := items[len(items)-1], [2]string{"back", "Return to previous menu"}; got != want {
+		if got, want := items[len(items)-1], [2]string{"cancel", "Do not accept or install"}; got != want {
 			t.Fatalf("last install acceptance item = %#v, want %#v", got, want)
 		}
 		if got, want := menuLabelWidth(items, 14), 14; got != want {
@@ -283,18 +283,18 @@ func TestInstallRepairMenuDescriptionUsesTwoColumnCopy(t *testing.T) {
 	}
 }
 
-func TestLicenseAcceptanceMenuUsesExplicitAcceptDeclineText(t *testing.T) {
+func TestLicenseAcceptanceMenuUsesAcceptAndCancel(t *testing.T) {
 	items := licenseAcceptanceMenuItems()
-	for _, tag := range []string{acceptLicenses, declineLicenses} {
+	for _, tag := range []string{acceptLicenses, "cancel"} {
 		if !hasMenuTag(items, tag) {
 			t.Fatalf("license acceptance menu missing %s: %#v", tag, items)
 		}
 	}
 }
 
-func TestOpenSourceNoticeAcceptanceMenuUsesExplicitText(t *testing.T) {
+func TestOpenSourceNoticeAcceptanceMenuUsesAcknowledgeAndCancel(t *testing.T) {
 	items := openSourceNoticeAcceptanceMenuItems()
-	for _, tag := range []string{acknowledgeNotices, declineLicenses} {
+	for _, tag := range []string{acknowledgeNotices, "cancel"} {
 		if !hasMenuTag(items, tag) {
 			t.Fatalf("open-source notice acceptance menu missing %s: %#v", tag, items)
 		}
@@ -303,7 +303,7 @@ func TestOpenSourceNoticeAcceptanceMenuUsesExplicitText(t *testing.T) {
 
 func TestRioDBLicenseAcceptanceMenuMentionsJavaNoticeWhenShown(t *testing.T) {
 	items := rioDBLicenseAcceptanceMenuItems(true)
-	if !hasMenuTag(items, acceptRioDBJavaLicense) || !hasMenuTag(items, declineLicenses) {
+	if !hasMenuTag(items, acceptRioDBJavaLicense) || !hasMenuTag(items, "cancel") {
 		t.Fatalf("RioDB license acceptance menu missing expected choices: %#v", items)
 	}
 	if !strings.Contains(acceptRioDBJavaLicense, "Java notices") {
@@ -313,7 +313,7 @@ func TestRioDBLicenseAcceptanceMenuMentionsJavaNoticeWhenShown(t *testing.T) {
 
 func TestRioDBLicenseAcceptanceMenuOmitsJavaWhenNoticeHidden(t *testing.T) {
 	items := rioDBLicenseAcceptanceMenuItems(false)
-	if !hasMenuTag(items, acceptRioDBLicense) || !hasMenuTag(items, declineLicenses) {
+	if !hasMenuTag(items, acceptRioDBLicense) || !hasMenuTag(items, "cancel") {
 		t.Fatalf("RioDB license acceptance menu missing expected choices: %#v", items)
 	}
 	if strings.Contains(acceptRioDBLicense, "Java") {

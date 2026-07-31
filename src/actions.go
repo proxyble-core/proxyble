@@ -107,7 +107,6 @@ const (
 	acknowledgeNotices     = "I acknowledge the component notices"
 	acceptRioDBLicense     = "I acknowledge the RioDB notice and accept the RioDB EULA"
 	acceptRioDBJavaLicense = "I acknowledge the RioDB and Java notices and accept the RioDB EULA"
-	declineLicenses        = "I do not accept"
 )
 
 // viewLicense prints the bundled component notices and archive RioDB EULA for
@@ -144,14 +143,14 @@ func reviewAndAcceptLicenseInteractiveWithJavaNotice(a *App, notice javaNoticeOp
 	if err := scrollableTextRequiredEnd("[proxyble] Installation -> License", "Review component notices and the RioDB EULA. Scroll to the end to continue.", lines); err != nil {
 		return false, err
 	}
-	choice, err := choiceMenu("[proxyble] Installation -> License", "You have reached the end of the component notices and RioDB EULA.", licenseAcceptanceMenuItems(), declineLicenses)
+	choice, err := choiceMenu("[proxyble] Installation -> License", "You have reached the end of the component notices and RioDB EULA.", licenseAcceptanceMenuItems(), "cancel")
 	if err != nil {
 		return false, err
 	}
 	switch choice {
 	case acceptLicenses:
 		return true, nil
-	case declineLicenses, "back", "exit":
+	case "cancel", "back", "exit":
 		return false, nil
 	default:
 		return false, fmt.Errorf("unknown license acceptance selection: %s", choice)
@@ -170,14 +169,14 @@ func reviewAndAcceptRioDBLicenseInteractive(a *App) (bool, error) {
 	if err := scrollableTextRequiredEnd("[proxyble] Installation -> Add RioDB", rioDBReviewPrompt(notice.IncludeJava), lines); err != nil {
 		return false, err
 	}
-	choice, err := choiceMenu("[proxyble] Installation -> Add RioDB", rioDBReachedEndPrompt(notice.IncludeJava), rioDBLicenseAcceptanceMenuItems(notice.IncludeJava), declineLicenses)
+	choice, err := choiceMenu("[proxyble] Installation -> Add RioDB", rioDBReachedEndPrompt(notice.IncludeJava), rioDBLicenseAcceptanceMenuItems(notice.IncludeJava), "cancel")
 	if err != nil {
 		return false, err
 	}
 	switch choice {
 	case rioDBAcceptText(notice.IncludeJava):
 		return true, nil
-	case declineLicenses, "back", "exit":
+	case "cancel", "back", "exit":
 		return false, nil
 	default:
 		return false, fmt.Errorf("unknown RioDB license acceptance selection: %s", choice)
@@ -194,14 +193,14 @@ func reviewAndAcknowledgeOpenSourceNoticesInteractive(a *App) (bool, error) {
 	if err := scrollableTextRequiredEnd("[proxyble] Installation -> Notice", "Review component notices. Scroll to the end to continue.", lines); err != nil {
 		return false, err
 	}
-	choice, err := choiceMenu("[proxyble] Installation -> Notice", "You have reached the end of the component notices.", openSourceNoticeAcceptanceMenuItems(), declineLicenses)
+	choice, err := choiceMenu("[proxyble] Installation -> Notice", "You have reached the end of the component notices.", openSourceNoticeAcceptanceMenuItems(), "cancel")
 	if err != nil {
 		return false, err
 	}
 	switch choice {
 	case acknowledgeNotices:
 		return true, nil
-	case declineLicenses, "back", "exit":
+	case "cancel", "back", "exit":
 		return false, nil
 	default:
 		return false, fmt.Errorf("unknown open-source notice acknowledgement selection: %s", choice)
@@ -257,21 +256,21 @@ func installAcceptanceMenuItems(profile installProfile) [][2]string {
 	}
 	return [][2]string{
 		{"install|accept", action},
-		{"back", "Return to previous menu"},
+		{"cancel", "Do not accept or install"},
 	}
 }
 
 func licenseAcceptanceMenuItems() [][2]string {
 	return [][2]string{
 		{acceptLicenses, ""},
-		{declineLicenses, ""},
+		{"cancel", "Do not accept the license"},
 	}
 }
 
 func openSourceNoticeAcceptanceMenuItems() [][2]string {
 	return [][2]string{
 		{acknowledgeNotices, ""},
-		{declineLicenses, ""},
+		{"cancel", "Do not acknowledge the notices"},
 	}
 }
 
@@ -285,7 +284,7 @@ func rioDBAcceptText(includeJava bool) string {
 func rioDBLicenseAcceptanceMenuItems(includeJava bool) [][2]string {
 	return [][2]string{
 		{rioDBAcceptText(includeJava), ""},
-		{declineLicenses, ""},
+		{"cancel", "Do not accept the license"},
 	}
 }
 
@@ -1879,7 +1878,7 @@ func promptJavaRemoval(a *App) (bool, error) {
 	choice, err := choiceMenu("[proxyble] Installation -> Remove", "RioDB is installed.\n\nWould you like to also remove Java JDK, or keep it for other applications?", [][2]string{
 		{"Yes, remove Java.", ""},
 		{"No, keep Java.", ""},
-		{"back", "Return to previous menu"},
+		{"cancel", "Cancel this action"},
 	}, "No, keep Java.")
 	if err != nil {
 		return false, err
@@ -1889,7 +1888,7 @@ func promptJavaRemoval(a *App) (bool, error) {
 		return true, nil
 	case "No, keep Java.":
 		return false, nil
-	case "back", "Cancel.", "exit":
+	case "back", "cancel", "exit":
 		return false, errActionCancelled
 	default:
 		return false, fmt.Errorf("unknown Java removal selection: %s", choice)
