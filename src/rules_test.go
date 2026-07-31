@@ -180,23 +180,23 @@ func TestCommandLineResetRequiresTypeBeforeStateLookup(t *testing.T) {
 	}
 }
 
-func TestPrepareRuleDraftDefaultsToPermanent(t *testing.T) {
+func TestRuleAddArgsWithoutExpirationDefaultToPermanent(t *testing.T) {
 	cfg := &Config{Data: map[string]map[string]string{
-		"traffic": {"mode": "tcp"},
+		"traffic": {"mode": "http"},
 	}}
-	draft, err := prepareRuleDraft(cfg, map[string]string{
-		"rule":      "LIMIT_CONCURRENT",
-		"target":    "0.0.0.0/0",
-		"parameter": "50",
-	})
+	fields, err := parseRuleAddArgs([]string{"--rule", "LIMIT_BANDWIDTH", "--target", "0.0.0.0/0", "--bandwidth", "10mb"})
+	if err != nil {
+		t.Fatalf("parseRuleAddArgs() error = %v", err)
+	}
+	draft, err := prepareRuleDraft(cfg, fields)
 	if err != nil {
 		t.Fatalf("prepareRuleDraft() error = %v", err)
 	}
 	if draft.Expiration != ruleDefaultExpiration {
 		t.Fatalf("draft expiration = %q, want %q", draft.Expiration, ruleDefaultExpiration)
 	}
-	if draft.Line != "LIMIT_CONCURRENT 0.0.0.0/0 50" {
-		t.Fatalf("draft line = %q, want LIMIT_CONCURRENT 0.0.0.0/0 50", draft.Line)
+	if draft.Line != "LIMIT_BANDWIDTH 0.0.0.0/0 10mb" {
+		t.Fatalf("draft line = %q, want LIMIT_BANDWIDTH 0.0.0.0/0 10mb", draft.Line)
 	}
 }
 
