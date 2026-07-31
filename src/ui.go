@@ -853,6 +853,10 @@ func readMenuKey(f *os.File) (string, error) {
 				return "up", nil
 			case 'B':
 				return "down", nil
+			case 'C':
+				return "right", nil
+			case 'D':
+				return "left", nil
 			case 'H':
 				return "home", nil
 			case 'F':
