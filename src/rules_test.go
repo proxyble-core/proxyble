@@ -153,7 +153,7 @@ func TestParseRuleAddArgsAcceptsYesFlag(t *testing.T) {
 func TestCommandLineRuleAddRequiresFlags(t *testing.T) {
 	app := &App{CommandLine: true}
 	err := addRule(context.Background(), app, nil)
-	if err == nil || !strings.Contains(err.Error(), "--rules-add requires --rule, --target, and --expiration") {
+	if err == nil || !strings.Contains(err.Error(), "--rules-add requires --rule and --target") {
 		t.Fatalf("addRule command-line missing flags error = %v", err)
 	}
 }
@@ -180,21 +180,23 @@ func TestCommandLineResetRequiresTypeBeforeStateLookup(t *testing.T) {
 	}
 }
 
-func TestPrepareRuleDraftAcceptsGlobalLimitConcurrent(t *testing.T) {
+func TestRuleAddArgsWithoutExpirationDefaultToPermanent(t *testing.T) {
 	cfg := &Config{Data: map[string]map[string]string{
-		"traffic": {"mode": "tcp"},
+		"traffic": {"mode": "http"},
 	}}
-	draft, err := prepareRuleDraft(cfg, map[string]string{
-		"rule":       "LIMIT_CONCURRENT",
-		"target":     "0.0.0.0/0",
-		"parameter":  "50",
-		"expiration": "none",
-	})
+	fields, err := parseRuleAddArgs([]string{"--rule", "LIMIT_BANDWIDTH", "--target", "0.0.0.0/0", "--bandwidth", "10mb"})
+	if err != nil {
+		t.Fatalf("parseRuleAddArgs() error = %v", err)
+	}
+	draft, err := prepareRuleDraft(cfg, fields)
 	if err != nil {
 		t.Fatalf("prepareRuleDraft() error = %v", err)
 	}
-	if draft.Line != "LIMIT_CONCURRENT 0.0.0.0/0 50" {
-		t.Fatalf("draft line = %q, want LIMIT_CONCURRENT 0.0.0.0/0 50", draft.Line)
+	if draft.Expiration != ruleDefaultExpiration {
+		t.Fatalf("draft expiration = %q, want %q", draft.Expiration, ruleDefaultExpiration)
+	}
+	if draft.Line != "LIMIT_BANDWIDTH 0.0.0.0/0 10mb" {
+		t.Fatalf("draft line = %q, want LIMIT_BANDWIDTH 0.0.0.0/0 10mb", draft.Line)
 	}
 }
 
