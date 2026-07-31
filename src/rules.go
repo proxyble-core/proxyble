@@ -663,14 +663,14 @@ func promptRuleSourceTarget(rule string) (string, error) {
 		renderRulesPage("Rule type: " + rule)
 		fmt.Fprintf(os.Stderr, "%s\n\n", hint)
 		printWizardReturnTip(os.Stderr, "")
-		fmt.Fprint(os.Stderr, "Source target: ")
+		fmt.Fprint(os.Stderr, "Source IP: ")
 		value, err := readWizardLine(os.Stdin)
 		if err != nil && value == "" {
 			return "", err
 		}
 		value = strings.TrimSpace(value)
 		switch strings.ToLower(value) {
-		case "", "cancel", "q", "quit":
+		case "cancel", "q", "quit":
 			return "", fmt.Errorf("rule creation cancelled")
 		}
 		normalized, err := normalizeSourceTarget(rule, value)
