@@ -297,7 +297,7 @@ func addRule(ctx context.Context, a *App, args []string) error {
 	}
 	if len(fields) == 0 {
 		if a.CommandLine {
-			return fmt.Errorf("--rules-add requires --rule, --target, and --expiration")
+			return fmt.Errorf("--rules-add requires --rule and --target")
 		}
 		return addRuleInteractive(ctx, a)
 	}
@@ -337,8 +337,11 @@ func prepareRuleDraft(c *Config, fields map[string]string) (ruleDraft, error) {
 	rule := strings.ToUpper(fields["rule"])
 	target := fields["target"]
 	expiration := fields["expiration"]
-	if rule == "" || target == "" || expiration == "" {
-		return ruleDraft{}, fmt.Errorf("--rules-add requires --rule, --target, and --expiration")
+	if expiration == "" {
+		expiration = ruleDefaultExpiration
+	}
+	if rule == "" || target == "" {
+		return ruleDraft{}, fmt.Errorf("--rules-add requires --rule and --target")
 	}
 	if !contains(availableRules(c), rule) {
 		return ruleDraft{}, fmt.Errorf("rule type is not available for current traffic mode: %s", rule)

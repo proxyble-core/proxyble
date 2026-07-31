@@ -1128,7 +1128,7 @@ func printActionHelp(action string) {
 	case "--policies-remove":
 		fmt.Println("Usage: proxyble --policies-remove --policy POLICY [--restart-riodb] [global flags]")
 	case "--rules-add":
-		fmt.Println("Usage: proxyble --rules-add --rule TYPE --target IP_OR_CIDR --expiration VALUE [rule flags] [global flags]")
+		fmt.Println("Usage: proxyble --rules-add --rule TYPE --target IP_OR_CIDR [--expiration VALUE] [rule flags] [global flags]")
 	case "--rules-check":
 		fmt.Println("Usage: proxyble --rules-check --ip IP [--remove] [selector flags] [global flags]")
 	case "--rules-reset":
