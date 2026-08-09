@@ -21,9 +21,55 @@ package main
 // before Proxyble has enough runtime configuration to use them.
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRunCommandFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commands.txt")
+	contents := "\n # comment\n--rules-list --silent # trailing comment\n--config-status\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	err := runCommandFile(path, []string{"--verbose", "--yes"}, func(args []string) error {
+		got = append(got, strings.Join(args, " "))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runCommandFile returned error: %v", err)
+	}
+	want := []string{"--rules-list --verbose --yes", "--config-status --verbose --yes"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("commands = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunCommandFileStopsOnFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commands.txt")
+	if err := os.WriteFile(path, []byte("--rules-list\n--config-status\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("failed")
+	runs := 0
+	err := runCommandFile(path, nil, func([]string) error { runs++; return wantErr })
+	if !errors.Is(err, wantErr) || runs != 1 {
+		t.Fatalf("error = %v, runs = %d; want wrapped failure after one run", err, runs)
+	}
+}
+
+func TestParseCommandFileInvocation(t *testing.T) {
+	file, globals, ok, err := parseCommandFileInvocation([]string{"--yes", "@rules.txt", "-s"})
+	if err != nil || !ok || file != "rules.txt" || strings.Join(globals, " ") != "--yes -s" {
+		t.Fatalf("got file=%q globals=%v ok=%t err=%v", file, globals, ok, err)
+	}
+	if _, _, _, err := parseCommandFileInvocation([]string{"@one", "@two"}); err == nil {
+		t.Fatal("multiple command files should fail")
+	}
+}
 
 func TestParseGlobalArgsVerboseOnlyKeepsWizardMode(t *testing.T) {
 	app, help, err := parseGlobalArgs([]string{"--verbose"})
