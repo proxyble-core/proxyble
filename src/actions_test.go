@@ -461,8 +461,8 @@ func TestValidateListenerCLIOptionsRequiresExplicitParameters(t *testing.T) {
 	}
 
 	opts = listenerOptions{mode: "https", port: "443", timeout: "60s"}
-	if _, err := validateListenerCLIOptions(&opts, "", "", "", ""); err == nil {
-		t.Fatalf("HTTPS listener CLI validation should require certificate input")
+	if _, err := validateListenerCLIOptions(&opts, "", "", "", ""); err == nil || err.Error() != "HTTPS listener mode requires exactly one of --certificate-path|--make-cert-local-ip|--make-cert-local-hostname|--make-cert-public-ip|--make-cert-fqdn" {
+		t.Fatalf("HTTPS listener CLI validation returned %q", err)
 	}
 }
 

@@ -896,7 +896,7 @@ func validateListenerCLIOptions(o *listenerOptions, existingPrimaryHost, existin
 	}
 	if mode == "https" {
 		if o.certificateOptions != 1 || o.certificate == "" && o.selfSignedFor == "" {
-			return "", fmt.Errorf("HTTPS listener mode requires exactly one certificate option")
+			return "", fmt.Errorf("HTTPS listener mode requires exactly one of --certificate-path|--make-cert-local-ip|--make-cert-local-hostname|--make-cert-public-ip|--make-cert-fqdn")
 		}
 		if o.certificate != "" {
 			if err := validateProvidedCertificate(o.certificate); err != nil {
