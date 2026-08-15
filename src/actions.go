@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -541,10 +542,9 @@ type listenerOptions struct {
 	timeout               string
 	certificate           string
 	certificateSelfSigned bool
-	generateSelfSigned    bool
+	certificateOptions    int
 	selfSignedFor         string
-	selfSignedFQDN        string
-	selfSignedOutput      string
+	selfSignedSubject     string
 	startServices         *bool
 	resetActiveRules      *bool
 }
@@ -660,12 +660,12 @@ func configureListenerAction(ctx context.Context, a *App, args []string) error {
 	}
 	certPath := ""
 	if mode == "https" {
-		if opts.generateSelfSigned {
-			subject, err := selfSignedSubject(opts.selfSignedFor, opts.selfSignedFQDN)
+		if opts.selfSignedFor != "" {
+			subject, err := selfSignedSubject(opts.selfSignedFor, opts.selfSignedSubject)
 			if err != nil {
 				return err
 			}
-			certPath, err = createSelfSignedPEM(opts.selfSignedFor, subject, opts.selfSignedOutput)
+			certPath, err = createSelfSignedPEM(opts.selfSignedFor, subject, "")
 			if err != nil {
 				return err
 			}
@@ -814,53 +814,48 @@ func parseListenerOptions(args []string) (listenerOptions, error) {
 		case strings.HasPrefix(arg, "--timeout="):
 			o.cli = true
 			o.timeout, _ = value()
-		case arg == "--certificate" || arg == "--cert" || arg == "--pem":
+		case arg == "--certificate-path":
 			o.cli = true
+			o.certificateOptions++
 			v, err := value()
 			if err != nil {
 				return o, err
 			}
 			o.certificate = v
-		case strings.HasPrefix(arg, "--certificate=") || strings.HasPrefix(arg, "--cert=") || strings.HasPrefix(arg, "--pem="):
+		case strings.HasPrefix(arg, "--certificate-path="):
 			o.cli = true
+			o.certificateOptions++
 			o.certificate, _ = value()
-		case arg == "--generate-self-signed":
+		case arg == "--make-cert-local-ip":
 			o.cli = true
-			o.generateSelfSigned = true
-		case strings.HasPrefix(arg, "--generate-self-signed="):
+			o.certificateOptions++
+			o.selfSignedFor = "ip"
+		case arg == "--make-cert-local-hostname":
 			o.cli = true
-			o.generateSelfSigned = true
-			o.selfSignedFor, _ = value()
-		case arg == "--self-signed-for":
+			o.certificateOptions++
+			o.selfSignedFor = "hostname"
+		case arg == "--make-cert-public-ip" || arg == "--make-cert-fqdn":
 			o.cli = true
+			o.certificateOptions++
 			v, err := value()
 			if err != nil {
 				return o, err
 			}
-			o.selfSignedFor = v
-		case strings.HasPrefix(arg, "--self-signed-for="):
-			o.cli = true
-			o.selfSignedFor, _ = value()
-		case arg == "--self-signed-fqdn" || arg == "--fqdn":
-			o.cli = true
-			v, err := value()
-			if err != nil {
-				return o, err
+			if arg == "--make-cert-public-ip" {
+				o.selfSignedFor = "ip"
+			} else {
+				o.selfSignedFor = "fqdn"
 			}
-			o.selfSignedFQDN = v
-		case strings.HasPrefix(arg, "--self-signed-fqdn=") || strings.HasPrefix(arg, "--fqdn="):
+			o.selfSignedSubject = v
+		case strings.HasPrefix(arg, "--make-cert-public-ip=") || strings.HasPrefix(arg, "--make-cert-fqdn="):
 			o.cli = true
-			o.selfSignedFQDN, _ = value()
-		case arg == "--self-signed-output" || arg == "--certificate-output":
-			o.cli = true
-			v, err := value()
-			if err != nil {
-				return o, err
+			o.certificateOptions++
+			if strings.HasPrefix(arg, "--make-cert-public-ip=") {
+				o.selfSignedFor = "ip"
+			} else {
+				o.selfSignedFor = "fqdn"
 			}
-			o.selfSignedOutput = v
-		case strings.HasPrefix(arg, "--self-signed-output=") || strings.HasPrefix(arg, "--certificate-output="):
-			o.cli = true
-			o.selfSignedOutput, _ = value()
+			o.selfSignedSubject, _ = value()
 		case arg == "--start-services" || arg == "--start-listener":
 			o.cli = true
 			o.startServices = setBool(true)
@@ -900,23 +895,20 @@ func validateListenerCLIOptions(o *listenerOptions, existingPrimaryHost, existin
 		return "", err
 	}
 	if mode == "https" {
-		if o.certificate != "" && o.generateSelfSigned {
-			return "", fmt.Errorf("use either --certificate PATH or --generate-self-signed, not both")
-		}
-		if o.certificate == "" && !o.generateSelfSigned {
-			return "", fmt.Errorf("HTTPS listener mode requires --certificate PATH or --generate-self-signed")
+		if o.certificateOptions != 1 || o.certificate == "" && o.selfSignedFor == "" {
+			return "", fmt.Errorf("HTTPS listener mode requires exactly one certificate option")
 		}
 		if o.certificate != "" {
-			if _, err := os.Stat(o.certificate); err != nil {
-				return "", fmt.Errorf("certificate file not found: %s", o.certificate)
-			}
-		}
-		if o.generateSelfSigned {
-			if _, err := selfSignedSubject(o.selfSignedFor, o.selfSignedFQDN); err != nil {
+			if err := validateProvidedCertificate(o.certificate); err != nil {
 				return "", err
 			}
 		}
-	} else if o.certificate != "" || o.generateSelfSigned || o.selfSignedFor != "" || o.selfSignedFQDN != "" || o.selfSignedOutput != "" {
+		if o.selfSignedFor != "" {
+			if _, err := selfSignedSubject(o.selfSignedFor, o.selfSignedSubject); err != nil {
+				return "", err
+			}
+		}
+	} else if o.certificateOptions != 0 {
 		return "", fmt.Errorf("certificate options can only be used with --mode https")
 	}
 	if err := validateBackendPortConflict(o.port, existingPrimaryHost, existingPrimaryPort, "Primary backend"); err != nil {
@@ -1256,7 +1248,8 @@ func promptHTTPSCertificate(existing string) (string, bool, error) {
 		}
 		choice, err := choiceMenu("[proxyble] Config -> Listener TLS", "HTTPS listeners require a HAProxy PEM bundle. Use an existing certificate or generate a self-signed one now.", [][2]string{
 			{"provide", "Provide an existing .pem file"},
-			{"ip", "Generate for current IP address (" + currentIP + ")"},
+			{"local ip", "Generate for current IP address (" + currentIP + ")"},
+			{"public ip", "Provide a different IP that points to Proxyble"},
 			{"hostname", "Generate for current hostname (" + currentHostname + ")"},
 			{"fqdn", "Generate for a DNS name that points to this server"},
 			{"back", "Return to previous menu"},
@@ -1269,8 +1262,19 @@ func promptHTTPSCertificate(existing string) (string, bool, error) {
 			return "", false, errWizardBack
 		case "cancel", "exit":
 			return "", false, errActionCancelled
-		case "ip":
+		case "local ip":
 			path, err := createSelfSignedPEM("ip", currentIP, "")
+			return path, true, err
+		case "public ip":
+			actionPage("[proxyble] Config -> Listener TLS", "HTTPS listeners require a HAProxy PEM bundle. Use an existing certificate or generate a self-signed one now.")
+			ip, err := promptValue("Public IP address", "", true)
+			if errors.Is(err, errWizardBack) {
+				continue
+			}
+			if err != nil {
+				return "", false, err
+			}
+			path, err := createSelfSignedPEM("ip", ip, "")
 			return path, true, err
 		case "hostname":
 			path, err := createSelfSignedPEM("hostname", currentHostname, "")
@@ -1299,12 +1303,25 @@ func promptHTTPSCertificate(existing string) (string, bool, error) {
 			case "cancel", "q", "quit":
 				return "", false, errActionCancelled
 			}
-			if _, err := os.Stat(v); err == nil {
+			if err := validateProvidedCertificate(v); err == nil {
 				return v, false, nil
+			} else {
+				fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
 			}
-			fmt.Fprintf(os.Stderr, "[ERROR] Certificate file not found: %s\n", v)
 		}
 	}
+}
+
+func validateProvidedCertificate(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("certificate file not found: %s", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ok || int(stat.Uid) != os.Geteuid() {
+		return fmt.Errorf("certificate file must be owned by the current user with permissions 0600: %s", path)
+	}
+	return nil
 }
 
 // listenerCertificateMessage summarizes the certificate path saved for HTTPS
@@ -1368,13 +1385,19 @@ func selfSignedSubject(target, fqdn string) (string, error) {
 	}
 	switch target {
 	case "ip":
+		if fqdn != "" {
+			if net.ParseIP(fqdn) == nil {
+				return "", fmt.Errorf("--make-cert-public-ip must be a valid IP address")
+			}
+			return fqdn, nil
+		}
 		return detectCurrentIP(), nil
 	case "hostname":
 		return detectCurrentHostname(), nil
 	case "fqdn":
 		fqdn = strings.TrimSuffix(fqdn, ".")
 		if !validDNSName(fqdn, true) {
-			return "", fmt.Errorf("--self-signed-fqdn must be a valid fully qualified domain name")
+			return "", fmt.Errorf("--make-cert-fqdn must be a valid fully qualified domain name")
 		}
 		return fqdn, nil
 	default:
@@ -1410,7 +1433,7 @@ func createSelfSignedPEM(target, subject, output string) (string, error) {
 	}
 	if target == "ip" {
 		ip := net.ParseIP(subject)
-		if ip == nil || ip.To4() == nil {
+		if ip == nil {
 			return "", fmt.Errorf("cannot generate certificate for invalid IP address: %s", subject)
 		}
 		template.IPAddresses = []net.IP{ip}

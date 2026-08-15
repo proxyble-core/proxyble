@@ -466,6 +466,50 @@ func TestValidateListenerCLIOptionsRequiresExplicitParameters(t *testing.T) {
 	}
 }
 
+func TestListenerCertificateOptions(t *testing.T) {
+	tests := []struct{ flag, value, target string }{
+		{"--make-cert-local-ip", "", "ip"},
+		{"--make-cert-local-hostname", "", "hostname"},
+		{"--make-cert-public-ip", "203.0.113.8", "ip"},
+		{"--make-cert-fqdn", "proxy.example.com", "fqdn"},
+	}
+	for _, tt := range tests {
+		args := []string{tt.flag}
+		if tt.value != "" {
+			args = append(args, tt.value)
+		}
+		opts, err := parseListenerOptions(args)
+		if err != nil || opts.certificateOptions != 1 || opts.selfSignedFor != tt.target || opts.selfSignedSubject != tt.value {
+			t.Fatalf("parseListenerOptions(%v) = %+v, %v", args, opts, err)
+		}
+	}
+	if got, err := selfSignedSubject("ip", "203.0.113.8"); err != nil || got != "203.0.113.8" {
+		t.Fatalf("public IP subject = %q, %v", got, err)
+	}
+	if _, err := selfSignedSubject("ip", "example.com"); err == nil {
+		t.Fatal("public IP certificate accepted a DNS name")
+	}
+	if _, err := parseListenerOptions([]string{"--generate-self-signed"}); err == nil {
+		t.Fatal("removed self-signed flags remain accepted")
+	}
+}
+
+func TestProvidedCertificateRequiresOwnerMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "listener.pem")
+	if err := os.WriteFile(path, []byte("pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProvidedCertificate(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProvidedCertificate(path); err == nil {
+		t.Fatal("provided certificate accepted permissions other than 0600")
+	}
+}
+
 func TestValidateBackendCLIOptionsRequiresPrimaryBackend(t *testing.T) {
 	opts := backendOptions{primaryHost: "127.0.0.1"}
 	if _, _, err := validateBackendCLIOptions(opts, "80", "", ""); err == nil {
