@@ -17,7 +17,7 @@ proxyble/
     THIRD-PARTY-NOTICES.txt
   bin/
     proxyble-rule-agent
-    riodb-settings.json
+    dependencies.json
   utils/
     *.sh
 ```
@@ -70,16 +70,16 @@ but does not build during customer installation.
 | Path | Purpose |
 | --- | --- |
 | `bin/proxyble-rule-agent` | Bundled rule enforcement binary installed to `/usr/local/bin/proxyble-rule-agent`. |
-| `bin/riodb-settings.json` | Release settings for Java package selection, the RioDB archive path, and RioDB download servers. |
+| `bin/dependencies.json` | Release dependencies for HAProxy, Java package selection, and RioDB payload download metadata. |
 
-`riodb-settings.json` is the stable place for release-specific runtime inputs.
-The `riodb.archive_path` value names the RioDB archive. Relative archive paths
-are resolved from installed `/opt/proxyble/bin/`, the settings file directory,
+`dependencies.json` is the stable place for release-specific runtime inputs.
+The `dependencies.riodb.archive_path` value names the RioDB archive. Relative archive paths
+are resolved from installed `/opt/proxyble/bin/`, the dependency manifest directory,
 and development `bin/`. If the archive is not present when RioDB analytics is
 selected, the installer downloads `archive_path` into `bin/` from the
-`riodb.download_servers` list and then extracts it.
+`dependencies.riodb.download_servers` list and then extracts it.
 
-Do not rename `proxyble-rule-agent`, `riodb-settings.json`, the configured RioDB
+Do not rename `proxyble-rule-agent`, `dependencies.json`, the configured RioDB
 archive path, or the RioDB download server schema without updating installer
 code, package validation, and release tests.
 
@@ -282,7 +282,7 @@ hook exist when nftables starts.
   `DESIGN.md` out of customer release archives.
 - Keep `riodb/LICENSES/RIODB-EULA.txt` inside the downloaded RioDB archive as the
   EULA path used by Installation -> License.
-- Keep `bin/riodb-settings.json` as the release settings file.
+- Keep `bin/dependencies.json` as the release dependency manifest.
 - Keep `/etc/proxyble/config.ini` as the canonical installed configuration.
 - Keep `/var/spool/proxyble/rules/inbox.tmp` as the default rule-agent handoff.
 - Keep `/etc/proxyble/allow-list/basic.sources` as the Basic allow-list source

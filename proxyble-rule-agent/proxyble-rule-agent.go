@@ -535,10 +535,14 @@ func applyHAProxy(s State) error {
 		return err
 	}
 	defer releaseLock(lock)
+	mapRefs, err := resolveHAProxyMapRefs()
+	if err != nil {
+		return err
+	}
 	if err := writeHAProxyMapFiles(s); err != nil {
 		return err
 	}
-	for _, command := range buildHAProxyCommands(s) {
+	for _, command := range buildHAProxyCommandsForRefs(s, mapRefs) {
 		response, err := runHAProxyRuntimeCommand(command)
 		if err != nil {
 			return fmt.Errorf("runtime api command %q failed: %w", command, err)
@@ -551,6 +555,73 @@ func applyHAProxy(s State) error {
 		}
 	}
 	return nil
+}
+
+type haproxyMapRefs struct {
+	rules         string
+	params        string
+	endpointRates string
+}
+
+func defaultHAProxyMapRefs() haproxyMapRefs {
+	return haproxyMapRefs{
+		rules:         mapRules,
+		params:        mapParams,
+		endpointRates: mapEndpointRates,
+	}
+}
+
+// resolveHAProxyMapRefs obtains the runtime IDs for the configured map files.
+// HAProxy 3 may expose chroot-relative filenames to the Runtime API, making
+// the absolute paths from the configuration invalid command identifiers.
+func resolveHAProxyMapRefs() (haproxyMapRefs, error) {
+	response, err := runHAProxyRuntimeCommand("show map")
+	if err != nil {
+		return haproxyMapRefs{}, fmt.Errorf("runtime api show map failed: %w", err)
+	}
+	if hasHAProxyRuntimeError(response) {
+		return haproxyMapRefs{}, fmt.Errorf("runtime api show map returned: %s", strings.TrimSpace(response))
+	}
+	return mapRefsFromShowMap(response)
+}
+
+func mapRefsFromShowMap(response string) (haproxyMapRefs, error) {
+	refs := defaultHAProxyMapRefs()
+	wanted := map[string]struct {
+		ref   *string
+		found bool
+	}{
+		filepath.Base(mapRules):         {ref: &refs.rules},
+		filepath.Base(mapParams):        {ref: &refs.params},
+		filepath.Base(mapEndpointRates): {ref: &refs.endpointRates},
+	}
+	for _, line := range strings.Split(response, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		id, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		open := strings.Index(line, "(")
+		close := strings.Index(line, ")")
+		if open < 0 || close <= open+1 {
+			continue
+		}
+		name := filepath.Base(line[open+1 : close])
+		if entry, ok := wanted[name]; ok {
+			*entry.ref = fmt.Sprintf("#%d", id)
+			entry.found = true
+			wanted[name] = entry
+		}
+	}
+	for name, entry := range wanted {
+		if !entry.found {
+			return haproxyMapRefs{}, fmt.Errorf("runtime api did not register %s; show map: %s", name, strings.TrimSpace(response))
+		}
+	}
+	return refs, nil
 }
 
 func runHAProxyRuntimeCommand(command string) (string, error) {
@@ -570,21 +641,25 @@ func runHAProxyRuntimeCommand(command string) (string, error) {
 }
 
 func buildHAProxyCommands(s State) []string {
+	return buildHAProxyCommandsForRefs(s, defaultHAProxyMapRefs())
+}
+
+func buildHAProxyCommandsForRefs(s State, refs haproxyMapRefs) []string {
 	commands := []string{
-		fmt.Sprintf("clear map %s", mapRules),
-		fmt.Sprintf("clear map %s", mapParams),
-		fmt.Sprintf("clear map %s", mapEndpointRates),
+		fmt.Sprintf("clear map %s", refs.rules),
+		fmt.Sprintf("clear map %s", refs.params),
+		fmt.Sprintf("clear map %s", refs.endpointRates),
 	}
 
 	for _, p := range sortedRules(s, SystemHAProxy) {
 		haCode := translateToHaCode(p.Action)
-		commands = append(commands, fmt.Sprintf("add map %s %s %s", mapRules, p.IP, haCode))
+		commands = append(commands, fmt.Sprintf("add map %s %s %s", refs.rules, p.IP, haCode))
 		if p.Parameter != "" {
-			commands = append(commands, fmt.Sprintf("add map %s %s %s", mapParams, p.IP, p.Parameter))
+			commands = append(commands, fmt.Sprintf("add map %s %s %s", refs.params, p.IP, p.Parameter))
 		}
 		if p.Action == ActionLimitEndpoint {
 			for _, endpoint := range p.Endpoints {
-				commands = append(commands, fmt.Sprintf("add map %s %s %d", mapEndpointRates, endpointMapKey(p.IP, endpoint), p.EndpointRateLimit))
+				commands = append(commands, fmt.Sprintf("add map %s %s %d", refs.endpointRates, endpointMapKey(p.IP, endpoint), p.EndpointRateLimit))
 			}
 		}
 	}

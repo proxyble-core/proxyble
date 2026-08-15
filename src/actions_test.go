@@ -61,7 +61,7 @@ func TestLicenseDisplayLinesIncludeOpenSourceNoticeAndRioDBEULA(t *testing.T) {
 		"Installed when: RioDB analytics is selected and no working Java runtime is already present",
 		"Package: Java 17 headless runtime from the operating system package manager",
 		"Distribution: OpenJDK Java 17 (headless)",
-		"Settings: The exact Java version and package are configured in proxyble/bin/riodb-settings.json",
+		"Settings: The exact Java version and package are configured in proxyble/bin/dependencies.json",
 		"Notice: This dependency is not installed for Core only",
 		"RioDB End User License Agreement:",
 		"RioDB EULA body",
@@ -125,7 +125,7 @@ func TestRioDBLicenseDisplayLinesExcludeCoreNotices(t *testing.T) {
 		"Website: https://www.riodb.co/",
 		"Java JDK: OpenJDK or Amazon Corretto",
 		"Installed when: RioDB analytics is selected and no working Java runtime is already present",
-		"Settings: The exact Java version and package are configured in proxyble/bin/riodb-settings.json",
+		"Settings: The exact Java version and package are configured in proxyble/bin/dependencies.json",
 		"Notice: This dependency is not installed for Core only",
 		"RioDB EULA body",
 	} {
@@ -193,10 +193,8 @@ func testAppWithRioDBArchive(t *testing.T, root, eula string) *App {
 		path.Join("riodb", rioDBEULAPath): eula,
 	})
 	return &App{
-		SourceRoot: root,
-		Settings: RuntimeSettings{RioDB: SettingsRioDB{
-			ArchivePath: archiveName,
-		}},
+		SourceRoot:   root,
+		Dependencies: DependencySettings{Dependencies: Dependencies{RioDB: RioDBDependency{ArchivePath: archiveName}}},
 	}
 }
 
@@ -348,7 +346,7 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	app := &App{Config: &Config{Data: map[string]map[string]string{
+	app := &App{Dependencies: testDependencySettings(), Config: &Config{Data: map[string]map[string]string{
 		"haproxy":  {"installed_by_proxyble": "true"},
 		"nftables": {"installed_by_proxyble": "true"},
 	}}}
@@ -375,7 +373,7 @@ func TestRemoveProxyblePackagesRemovesOwnedPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	app := &App{Config: &Config{Data: map[string]map[string]string{
+	app := &App{Dependencies: testDependencySettings(), Config: &Config{Data: map[string]map[string]string{
 		"haproxy":  {"installed_by_proxyble": "true"},
 		"nftables": {"installed_by_proxyble": "true"},
 	}}}

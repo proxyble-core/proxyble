@@ -136,13 +136,13 @@ func main() {
 		os.Exit(1)
 	}
 	app.SourceRoot = findResourceRoot()
-	settings, settingsPath, err := loadRuntimeSettings(app.SourceRoot)
+	dependencies, dependenciesPath, err := loadDependencySettings(app.SourceRoot)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[ERROR]", err)
 		os.Exit(1)
 	}
-	app.Settings = settings
-	app.SettingsPath = settingsPath
+	app.Dependencies = dependencies
+	app.DependenciesPath = dependenciesPath
 	if err := requireRoot(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -238,7 +238,7 @@ func ensureAppConfig(a *App) error {
 		return err
 	}
 	a.Config = cfg
-	return applySettingsConfigDefaults(a.Config, a.Settings, created)
+	return applyDependencyConfigDefaults(a.Config, a.Dependencies, created)
 }
 
 // parseGlobalArgs separates global flags, one action, and action-specific
