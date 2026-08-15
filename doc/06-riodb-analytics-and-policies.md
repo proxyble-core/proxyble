@@ -42,7 +42,7 @@ traffic arrives.
 
 RioDB requires Java. The license screen shows a Java JDK notice for OpenJDK or
 Amazon Corretto whenever RioDB is selected. The exact Java version and package
-are configured in `bin/riodb-settings.json`; current release settings use Java
+are configured in `bin/dependencies.json`; current release settings use Java
 17 headless packages. If a working `java` command already exists, Proxyble
 skips Java installation.
 

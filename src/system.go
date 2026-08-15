@@ -57,8 +57,8 @@ type App struct {
 	Action                   string
 	Args                     []string
 	Config                   *Config
-	Settings                 RuntimeSettings
-	SettingsPath             string
+	Dependencies             DependencySettings
+	DependenciesPath         string
 	LogFile                  *os.File
 	LogPath                  string
 	SourceRoot               string
@@ -533,6 +533,71 @@ func packageInstall(ctx context.Context, p Platform, out io.Writer, packages ...
 	default:
 		return fmt.Errorf("unsupported package manager: %s", p.PackageManager)
 	}
+}
+
+// packageAvailableVersions returns the package versions advertised by the
+// enabled default repositories. Repository configuration is deliberately left
+// to the host administrator.
+func packageAvailableVersions(ctx context.Context, p Platform, pkg string) ([]string, error) {
+	var cmd *exec.Cmd
+	switch p.PackageManager {
+	case "apt-get":
+		cmd = exec.CommandContext(ctx, "apt-cache", "madison", pkg)
+	case "dnf", "yum":
+		cmd = exec.CommandContext(ctx, p.PackageManager, "--showduplicates", "list", "--available", pkg)
+	case "tdnf":
+		cmd = exec.CommandContext(ctx, p.PackageManager, "list", "available", pkg)
+	default:
+		return nil, fmt.Errorf("unsupported package manager: %s", p.PackageManager)
+	}
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("query %s versions via %s: %w: %s", pkg, p.PackageManager, err, strings.TrimSpace(string(out)))
+	}
+	if p.PackageManager == "apt-get" {
+		return parseAPTPackageVersions(string(out), pkg), nil
+	}
+	return parseRPMPackageVersions(string(out), pkg), nil
+}
+
+func parseAPTPackageVersions(output, pkg string) []string {
+	var versions []string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Split(line, "|")
+		if len(fields) < 2 || strings.TrimSpace(fields[0]) != pkg {
+			continue
+		}
+		if version := strings.TrimSpace(fields[1]); version != "" {
+			versions = append(versions, version)
+		}
+	}
+	return versions
+}
+
+func parseRPMPackageVersions(output, pkg string) []string {
+	var versions []string
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimSuffix(fields[0], ".src")
+		if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+			name = name[:dot]
+		}
+		if name == pkg {
+			versions = append(versions, fields[1])
+		}
+	}
+	return versions
+}
+
+func packageVersionSelector(p Platform, pkg, version string) string {
+	if p.PackageManager == "apt-get" {
+		return pkg + "=" + version
+	}
+	return pkg + "-" + version
 }
 
 // packageRemove removes one OS package using the detected package manager.

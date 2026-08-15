@@ -48,12 +48,12 @@ case "$TARGET" in
         ;;
 esac
 
-RIODB_SETTINGS="$PROJECT_DIR/bin/riodb-settings.json"
-[[ -f "$RIODB_SETTINGS" ]] || { echo "[ERROR] Missing $RIODB_SETTINGS"; exit 1; }
+DEPENDENCIES="$PROJECT_DIR/bin/dependencies.json"
+[[ -f "$DEPENDENCIES" ]] || { echo "[ERROR] Missing $DEPENDENCIES"; exit 1; }
 [[ -f "$PROXYBLE_SRC_DIR/allowlist.go" ]] || { echo "[ERROR] Missing allow-list source file: $PROXYBLE_SRC_DIR/allowlist.go"; exit 1; }
-RIODB_ARCHIVE_PATH="$(awk -F'"' '/"archive_path"[[:space:]]*:/ { print $4; exit }' "$RIODB_SETTINGS")"
-[[ -n "$RIODB_ARCHIVE_PATH" ]] || { echo "[ERROR] Missing riodb.archive_path in $RIODB_SETTINGS"; exit 1; }
-[[ "$RIODB_ARCHIVE_PATH" != /* && "$RIODB_ARCHIVE_PATH" != *..* ]] || { echo "[ERROR] riodb.archive_path must be relative to proxyble/bin"; exit 1; }
+RIODB_ARCHIVE_PATH="$(awk -F'"' '/"archive_path"[[:space:]]*:/ { print $4; exit }' "$DEPENDENCIES")"
+[[ -n "$RIODB_ARCHIVE_PATH" ]] || { echo "[ERROR] Missing dependencies.riodb.archive_path in $DEPENDENCIES"; exit 1; }
+[[ "$RIODB_ARCHIVE_PATH" != /* && "$RIODB_ARCHIVE_PATH" != *..* ]] || { echo "[ERROR] dependencies.riodb.archive_path must be relative to proxyble/bin"; exit 1; }
 [[ -f "$VERSION_FILE" ]] || { echo "[ERROR] Missing version source file: $VERSION_FILE"; exit 1; }
 [[ -d "$PROJECT_DIR/templates/RioSQL/policies" ]] || { echo "[ERROR] Missing $PROJECT_DIR/templates/RioSQL/policies"; exit 1; }
 find "$PROJECT_DIR/templates/RioSQL/policies" -maxdepth 1 -type f -name '*.sql' | grep -q . || { echo "[ERROR] No deployable policy SQL templates found"; exit 1; }
@@ -123,7 +123,7 @@ package_target() {
             sub(/"archive_path"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"archive_path\": \"" archive "\"")
         }
         { print }
-    ' "$RIODB_SETTINGS" > "$pkg_dir/bin/riodb-settings.json"
+    ' "$DEPENDENCIES" > "$pkg_dir/bin/dependencies.json"
     cp -a "$PROJECT_DIR/utils" "$pkg_dir/"
 
     echo "[$target 4/4] Creating $archive"

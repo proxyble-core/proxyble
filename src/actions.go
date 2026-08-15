@@ -364,28 +364,28 @@ func rioDBComponentNoticeBlock(eulaSource string) string {
 
 type javaNoticeOptions struct {
 	IncludeJava bool
-	Package     SettingsJavaPackage
+	Package     JavaPackage
 	Version     string
 }
 
 func defaultJavaNoticeOptions(a *App) javaNoticeOptions {
-	settings := defaultRuntimeSettings()
+	settings := defaultDependencySettings()
 	if a != nil {
-		settings = a.Settings
+		settings = a.Dependencies
 		settings.fillDefaults()
 	}
 	return javaNoticeOptions{
 		IncludeJava: true,
-		Package:     settings.Java.Default,
-		Version:     settings.Java.Version,
+		Package:     settings.Dependencies.Java.Default,
+		Version:     settings.Dependencies.Java.Version,
 	}
 }
 
 func javaNoticeOptionsForInstall(ctx context.Context, a *App) javaNoticeOptions {
 	notice := defaultJavaNoticeOptions(a)
-	settings := defaultRuntimeSettings()
+	settings := defaultDependencySettings()
 	if a != nil {
-		settings = a.Settings
+		settings = a.Dependencies
 		settings.fillDefaults()
 	}
 	if p, err := detectPlatform(); err == nil {
@@ -406,18 +406,18 @@ func javaDependencyNoticeOptions(ctx context.Context, a *App) javaNoticeOptions 
 func javaRuntimeNoticeBlock(notice javaNoticeOptions) string {
 	pkg := notice.Package
 	if pkg.Label == "" {
-		pkg = defaultRuntimeSettings().Java.Default
+		pkg = defaultDependencySettings().Dependencies.Java.Default
 	}
 	version := strings.TrimSpace(notice.Version)
 	if version == "" {
-		version = defaultRuntimeSettings().Java.Version
+		version = defaultDependencySettings().Dependencies.Java.Version
 	}
 	return fmt.Sprintf(`Java JDK: OpenJDK or Amazon Corretto
 Purpose: Java dependency required to run RioDB analytics
 Installed when: RioDB analytics is selected and no working Java runtime is already present
 Package: Java %s headless runtime from the operating system package manager
 Distribution: %s
-Settings: The exact Java version and package are configured in proxyble/bin/riodb-settings.json
+Settings: The exact Java version and package are configured in proxyble/bin/dependencies.json
 Notice: This dependency is not installed for Core only`, version, pkg.Label)
 }
 
@@ -1164,8 +1164,8 @@ func validateBackendCLIOptions(o backendOptions, listenerPort, existingSecondary
 // shouldStartServices centralizes the final start confirmation used by both
 // listener and backend configuration.
 func shouldStartServices(a *App, cli bool, explicit *bool) (bool, error) {
-	if cli && explicit != nil {
-		return *explicit, nil
+	if cli {
+		return explicit != nil && *explicit, nil
 	}
 	return appConfirm(a, "Start all Proxyble services now?")
 }
@@ -1832,7 +1832,7 @@ func removeProxyblePackages(ctx context.Context, a *App, p Platform, removeJava,
 	out := stepOutput(a)
 	removedPackage := false
 	if packageInstalledByProxyble(a.Config, "haproxy") {
-		if err := packageRemove(ctx, p, out, defaultHAProxyPackage); err != nil {
+		if err := packageRemove(ctx, p, out, a.Dependencies.Dependencies.HAProxy.Package); err != nil {
 			return fmt.Errorf("remove HAProxy package: %w", err)
 		}
 		removedPackage = true
@@ -1848,7 +1848,7 @@ func removeProxyblePackages(ctx context.Context, a *App, p Platform, removeJava,
 		fmt.Fprintln(out, "[NOTICE] nftables package preserved; Proxyble did not install it or ownership is unknown.")
 	}
 	if removeJava {
-		javaPkg, err := a.Settings.JavaPackage(p.Family)
+		javaPkg, err := a.Dependencies.JavaPackage(p.Family)
 		if err != nil {
 			return fmt.Errorf("resolve Java package for removal: %w", err)
 		}
@@ -1922,9 +1922,9 @@ func javaRemovalCandidate(ctx context.Context, a *App, p Platform) bool {
 	if !probeExistingJavaRuntime(ctx).Available {
 		return false
 	}
-	settings := defaultRuntimeSettings()
+	settings := defaultDependencySettings()
 	if a != nil {
-		settings = a.Settings
+		settings = a.Dependencies
 		settings.fillDefaults()
 	}
 	javaPkg, err := settings.JavaPackage(p.Family)

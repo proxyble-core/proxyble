@@ -328,6 +328,25 @@ func TestBuildHAProxyPayload(t *testing.T) {
 	mustNotContain(t, payload, ";")
 }
 
+func TestResolveHAProxyMapRefsFromHAProxy3Output(t *testing.T) {
+	output := `# id (file) description
+0 (/var/lib/haproxy/etc/haproxy/maps/rules.map) pattern loaded from file
+1 (/var/lib/haproxy/etc/haproxy/maps/params.map) pattern loaded from file
+2 (/var/lib/haproxy/etc/haproxy/maps/endpoint-rates.map) pattern loaded from file
+`
+	refs, err := mapRefsFromShowMap(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs.rules != "#0" || refs.params != "#1" || refs.endpointRates != "#2" {
+		t.Fatalf("resolved refs = %+v, want #0, #1, #2", refs)
+	}
+	commands := strings.Join(buildHAProxyCommandsForRefs(State{Rules: map[string]Rule{}}, refs), "\n")
+	mustContain(t, commands, "clear map #0")
+	mustContain(t, commands, "clear map #1")
+	mustContain(t, commands, "clear map #2")
+}
+
 func TestBuildHAProxyMapBodies(t *testing.T) {
 	state := State{Rules: map[string]Rule{
 		"192.0.2.20/32": {IP: "192.0.2.20/32", Action: ActionLimitBandwidth, System: SystemHAProxy, Parameter: "15mb"},

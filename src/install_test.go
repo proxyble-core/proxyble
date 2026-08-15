@@ -167,10 +167,10 @@ func TestEnsureRioDBArchiveDownloadsMissingArchive(t *testing.T) {
 		Config: &Config{Data: map[string]map[string]string{
 			"proxyble": {"install_dir": installRoot},
 		}},
-		Settings: RuntimeSettings{RioDB: SettingsRioDB{
+		Dependencies: DependencySettings{Dependencies: Dependencies{RioDB: RioDBDependency{
 			ArchivePath:     "riodb-test.tar.gz",
 			DownloadServers: []string{"https://downloads.example.test/riodb"},
-		}},
+		}}},
 	}
 
 	archive, err := ensureRioDBArchive(context.Background(), app)

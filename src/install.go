@@ -21,7 +21,7 @@ package main
 // installation, RioDB extraction, HAProxy/nftables setup, rule-agent systemd
 // units, SQL asset sync, and start/stop workflows. Future maintainers should
 // keep release-specific RioDB archive, download server, and Java package values
-// in bin/riodb-settings.json when possible, not hardcoded in this file.
+// in bin/dependencies.json when possible, not hardcoded in this file.
 
 import (
 	"bytes"
@@ -42,6 +42,11 @@ type installStep struct {
 }
 
 const serviceControlTimeoutSeconds = 60
+
+const (
+	defaultNFTablesPackage     = "nftables"
+	defaultRuleAgentBinaryName = "proxyble-rule-agent"
+)
 
 // runInstall executes the selected Proxyble installation profile and records
 // each step in the action log.
@@ -433,10 +438,12 @@ func installProxybleCommand(ctx context.Context, a *App) error {
 		_ = chownRecursive(dstTemplates, "root", "root")
 		_ = chmodTemplateBundle(dstTemplates)
 	}
-	if a.SettingsPath != "" {
-		settingsDst := filepath.Join(installRoot, "bin", defaultSettingsName)
-		_ = copyFile(a.SettingsPath, settingsDst, 0o600)
-		_ = chownPath(settingsDst, "root", "root")
+	if a.DependenciesPath != "" {
+		dependenciesDst := filepath.Join(installRoot, "bin", defaultDependenciesName)
+		if err := copyFile(a.DependenciesPath, dependenciesDst, 0o600); err != nil {
+			return err
+		}
+		_ = chownPath(dependenciesDst, "root", "root")
 	}
 	fmt.Fprintf(out, "[PASS] Proxyble command installed (%s)\n", launcherPath)
 	if ctx != nil {
@@ -493,7 +500,7 @@ func chmodTemplateBundle(path string) error {
 // package only when this host does not already have Java available.
 func installJava(ctx context.Context, a *App, p Platform, packageSession *packageMetadataSession) error {
 	out := stepOutput(a)
-	javaPkg, err := a.Settings.JavaPackage(p.Family)
+	javaPkg, err := a.Dependencies.JavaPackage(p.Family)
 	if err != nil {
 		return err
 	}
@@ -805,12 +812,12 @@ func ensureRioDBArchive(ctx context.Context, a *App) (string, error) {
 	if err == nil {
 		return archive, nil
 	}
-	archivePath := strings.TrimSpace(a.Settings.RioDB.ArchivePath)
+	archivePath := strings.TrimSpace(a.Dependencies.Dependencies.RioDB.ArchivePath)
 	if archivePath == "" {
-		return "", fmt.Errorf("RioDB archive path is empty in %s", defaultSettingsName)
+		return "", fmt.Errorf("RioDB archive path is empty in %s", defaultDependenciesName)
 	}
-	if len(a.Settings.RioDB.DownloadServers) == 0 {
-		return "", fmt.Errorf("%w; no riodb.download_servers configured in %s", err, defaultSettingsName)
+	if len(a.Dependencies.Dependencies.RioDB.DownloadServers) == 0 {
+		return "", fmt.Errorf("%w; no dependencies.riodb.download_servers configured in %s", err, defaultDependenciesName)
 	}
 	return downloadRioDBArchive(ctx, a, archivePath)
 }
@@ -818,9 +825,9 @@ func ensureRioDBArchive(ctx context.Context, a *App) (string, error) {
 // findRioDBArchive searches installed, settings-relative, and development
 // resource locations for the configured RioDB distribution archive.
 func findRioDBArchive(a *App) (string, error) {
-	archivePath := strings.TrimSpace(a.Settings.RioDB.ArchivePath)
+	archivePath := strings.TrimSpace(a.Dependencies.Dependencies.RioDB.ArchivePath)
 	if archivePath == "" {
-		return "", fmt.Errorf("RioDB archive path is empty in %s", defaultSettingsName)
+		return "", fmt.Errorf("RioDB archive path is empty in %s", defaultDependenciesName)
 	}
 	candidates := []string{}
 	if filepath.IsAbs(archivePath) {
@@ -856,7 +863,7 @@ func downloadRioDBArchive(ctx context.Context, a *App, archivePath string) (stri
 	dst := filepath.Join(dstDir, archiveName)
 	out := stepOutput(a)
 	var failures []string
-	for _, server := range a.Settings.RioDB.DownloadServers {
+	for _, server := range a.Dependencies.Dependencies.RioDB.DownloadServers {
 		downloadURL, err := rioDBArchiveDownloadURL(server, archiveName)
 		if err != nil {
 			failures = append(failures, err.Error())
@@ -892,8 +899,8 @@ func rioDBArchiveBinDirs(a *App) []string {
 	if a != nil && a.Config != nil {
 		add(filepath.Join(a.Config.Get("proxyble", "install_dir", "/opt/proxyble"), "bin"))
 	}
-	if a != nil && a.SettingsPath != "" {
-		add(filepath.Dir(a.SettingsPath))
+	if a != nil && a.DependenciesPath != "" {
+		add(filepath.Dir(a.DependenciesPath))
 	}
 	if a != nil && a.SourceRoot != "" {
 		add(filepath.Join(a.SourceRoot, "bin"))
@@ -918,10 +925,10 @@ func rioDBArchiveDownloadDir(a *App) (string, error) {
 func rioDBArchiveDownloadName(archivePath string) (string, error) {
 	name := strings.TrimSpace(archivePath)
 	if name == "" {
-		return "", fmt.Errorf("RioDB archive path is empty in %s", defaultSettingsName)
+		return "", fmt.Errorf("RioDB archive path is empty in %s", defaultDependenciesName)
 	}
 	if filepath.IsAbs(name) || filepath.Clean(name) != filepath.Base(name) || strings.Contains(name, "..") {
-		return "", fmt.Errorf("riodb.archive_path must be a file name to download automatically: %s", archivePath)
+		return "", fmt.Errorf("dependencies.riodb.archive_path must be a file name to download automatically: %s", archivePath)
 	}
 	return name, nil
 }

@@ -39,8 +39,6 @@ import (
 const haproxyRuntimeAdminGroup = "proxyble-haproxy-admin"
 
 const (
-	legacyHAProxyPerformancePackage = "haproxy-awslc"
-
 	haproxyMetricLayerRequestArrival    = "request-arrival"
 	haproxyMetricLayerRequestCompletion = "request-completion"
 )
@@ -417,50 +415,106 @@ func haproxyVersionLine(ctx context.Context) (string, error) {
 	return strings.SplitN(strings.TrimSpace(buf.String()), "\n", 2)[0], nil
 }
 
-func haproxyRemovalPackages(Platform) []string {
-	// Retain the former performance-package name so removal also works for
-	// hosts installed by older Proxyble releases.
-	return []string{legacyHAProxyPerformancePackage, defaultHAProxyPackage}
+func highestSupportedPackageVersion(versions []string, dependency HAProxyDependency) (string, bool) {
+	var selected string
+	var selectedVersion dependencyVersion
+	for _, candidate := range versions {
+		parsed, err := parseDependencyVersion(candidate)
+		if err != nil {
+			continue
+		}
+		supported, err := dependency.supports(candidate)
+		if err != nil || !supported {
+			continue
+		}
+		if selected == "" || compareDependencyVersions(parsed, selectedVersion) > 0 {
+			selected = candidate
+			selectedVersion = parsed
+		}
+	}
+	return selected, selected != ""
+}
+
+func manualHAProxyPrerequisiteError(dependency HAProxyDependency, reason string) error {
+	return fmt.Errorf("%s; manually install HAProxy %s, then run Proxyble installation again", reason, dependency.rangeDescription())
 }
 
 // ensureHAProxyBinary reuses any working HAProxy already on PATH. When no
 // binary is present, it installs the distribution's native Community package
 // through the package manager selected during platform detection.
-func ensureHAProxyBinary(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform, packageSession *packageMetadataSession) (bool, error) {
+func ensureHAProxyBinary(ctx context.Context, out interface{ Write([]byte) (int, error) }, p Platform, packageSession *packageMetadataSession, dependency HAProxyDependency) (bool, error) {
 	if commandExists("haproxy") {
 		line, err := haproxyVersionLine(ctx)
 		if err != nil {
 			return false, fmt.Errorf("existing HAProxy binary detected but version verification failed: %w", err)
 		}
-		fmt.Fprintf(out, "[PASS] Existing HAProxy binary detected (%s); package installation skipped\n", line)
-		return false, nil
+		supported, err := dependency.supports(line)
+		if err != nil {
+			return false, fmt.Errorf("existing HAProxy version verification failed: %w", err)
+		}
+		if supported {
+			fmt.Fprintf(out, "[PASS] Existing HAProxy binary detected (%s); supported version, package installation skipped\n", line)
+			return false, nil
+		}
+		fmt.Fprintf(out, "[NOTICE] Existing HAProxy is outside the supported range (%s; required %s)\n", line, dependency.rangeDescription())
 	}
 
-	fmt.Fprintln(out, "[NOTICE] HAProxy binary not detected")
-	fmt.Fprintf(out, "[INFO] Installing native HAProxy package via %s\n", p.PackageManager)
+	if !commandExists("haproxy") {
+		fmt.Fprintln(out, "[NOTICE] HAProxy binary not detected")
+	}
+	switch p.PackageManager {
+	case "apt-get", "dnf", "yum", "tdnf":
+	default:
+		return false, manualHAProxyPrerequisiteError(dependency, "no supported package manager (apt-get, dnf, yum, or tdnf) was detected")
+	}
+	fmt.Fprintf(out, "[INFO] Checking default %s repositories for supported HAProxy packages\n", p.PackageManager)
 	if err := packageSession.update(ctx, p, out); err != nil {
 		return false, err
 	}
-	if err := packageInstall(ctx, p, out, defaultHAProxyPackage); err != nil {
+	versions, err := packageAvailableVersions(ctx, p, dependency.Package)
+	if err != nil {
+		return false, manualHAProxyPrerequisiteError(dependency, fmt.Sprintf("could not query the default %s repositories: %v", p.PackageManager, err))
+	}
+	selected, ok := highestSupportedPackageVersion(versions, dependency)
+	if !ok {
+		return false, manualHAProxyPrerequisiteError(dependency, fmt.Sprintf("the default %s repositories do not provide a supported HAProxy package", p.PackageManager))
+	}
+	fmt.Fprintf(out, "[INFO] Installing HAProxy package version %s via %s\n", selected, p.PackageManager)
+	if err := packageInstall(ctx, p, out, packageVersionSelector(p, dependency.Package, selected)); err != nil {
 		return false, err
 	}
 	line, err := haproxyVersionLine(ctx)
 	if err != nil {
 		return false, fmt.Errorf("HAProxy package installation completed but version verification failed: %w", err)
 	}
+	supported, err := dependency.supports(line)
+	if err != nil || !supported {
+		return false, fmt.Errorf("HAProxy package installation produced unsupported version %q; required %s", line, dependency.rangeDescription())
+	}
 	fmt.Fprintf(out, "[PASS] HAProxy package installation completed (%s)\n", line)
 	return true, nil
 }
 
 func ensureHAProxyPackage(ctx context.Context, a *App, out interface{ Write([]byte) (int, error) }, p Platform, packageSession *packageMetadataSession) (bool, error) {
+	dependency := a.Dependencies.Dependencies.HAProxy
 	if commandExists("haproxy") {
-		return ensureHAProxyBinary(ctx, out, p, packageSession)
+		line, err := haproxyVersionLine(ctx)
+		if err == nil {
+			if supported, _ := dependency.supports(line); supported {
+				return ensureHAProxyBinary(ctx, out, p, packageSession, dependency)
+			}
+		}
 	}
-	installedBefore, err := packageInstalled(ctx, p, defaultHAProxyPackage)
+	switch p.PackageManager {
+	case "apt-get", "dnf", "yum", "tdnf":
+	default:
+		return ensureHAProxyBinary(ctx, out, p, packageSession, dependency)
+	}
+	installedBefore, err := packageInstalled(ctx, p, dependency.Package)
 	if err != nil {
 		return false, fmt.Errorf("detect existing HAProxy package ownership: %w", err)
 	}
-	installedNow, err := ensureHAProxyBinary(ctx, out, p, packageSession)
+	installedNow, err := ensureHAProxyBinary(ctx, out, p, packageSession, dependency)
 	if err != nil {
 		return false, err
 	}
