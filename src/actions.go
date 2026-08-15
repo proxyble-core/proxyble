@@ -1164,8 +1164,8 @@ func validateBackendCLIOptions(o backendOptions, listenerPort, existingSecondary
 // shouldStartServices centralizes the final start confirmation used by both
 // listener and backend configuration.
 func shouldStartServices(a *App, cli bool, explicit *bool) (bool, error) {
-	if cli && explicit != nil {
-		return *explicit, nil
+	if cli {
+		return explicit != nil && *explicit, nil
 	}
 	return appConfirm(a, "Start all Proxyble services now?")
 }

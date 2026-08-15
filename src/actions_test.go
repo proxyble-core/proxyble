@@ -510,6 +510,13 @@ func TestProvidedCertificateRequiresOwnerMode(t *testing.T) {
 	}
 }
 
+func TestCLIConfigurationDoesNotStartServicesByDefault(t *testing.T) {
+	start, err := shouldStartServices(&App{AssumeYes: true}, true, nil)
+	if err != nil || start {
+		t.Fatalf("shouldStartServices() = %v, %v; want false, nil", start, err)
+	}
+}
+
 func TestValidateBackendCLIOptionsRequiresPrimaryBackend(t *testing.T) {
 	opts := backendOptions{primaryHost: "127.0.0.1"}
 	if _, _, err := validateBackendCLIOptions(opts, "80", "", ""); err == nil {
