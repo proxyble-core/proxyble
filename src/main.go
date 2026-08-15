@@ -1203,6 +1203,7 @@ func printActionHelp(action string) {
 		fmt.Println("Usage: proxyble --installation-remove [--remove-java|--keep-java] [global flags]")
 	case "--config-listener":
 		fmt.Println("Usage: proxyble --config-listener --mode tcp|http|https --port PORT --timeout VALUE [flags] [global flags]")
+		fmt.Println("HTTPS certificate: --certificate-path PATH | --make-cert-local-ip | --make-cert-local-hostname | --make-cert-public-ip IP | --make-cert-fqdn NAME")
 	case "--config-backend":
 		fmt.Println("Usage: proxyble --config-backend --primary-host HOST --primary-port PORT [flags] [global flags]")
 	case "--config-start":
