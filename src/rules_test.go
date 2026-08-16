@@ -279,22 +279,22 @@ func TestVerifyRulePersistedForEveryRuleType(t *testing.T) {
 	nftState := stateFile{Rules: map[string]map[string]any{}, Extra: map[string]any{}}
 	haState := stateFile{Rules: map[string]map[string]any{}, Extra: map[string]any{}}
 	drafts := []ruleDraft{
-		{Rule: "BUSY_DEFLECTION", Target: "192.0.2.1", Expiration: "none"},
+		{Rule: "BUSY_DEFLECTION", Target: "0.0.0.0/0", Expiration: "none"},
 		{Rule: "DROP", Target: "192.0.2.2", Expiration: "none"},
 		{Rule: "LIMIT_BANDWIDTH", Target: "192.0.2.3", Parameter: "10mb", Expiration: "none"},
-		{Rule: "LIMIT_CONCURRENT", Target: "192.0.2.4", Parameter: "50", Expiration: "none"},
-		{Rule: "LIMIT_CONN_RATE", Target: "192.0.2.5", Parameter: "25/second", Expiration: "none"},
+		{Rule: "LIMIT_CONCURRENT", Target: "0.0.0.0/0", Parameter: "50", Expiration: "none"},
+		{Rule: "LIMIT_CONN_RATE", Target: "0.0.0.0/0", Parameter: "25/second", Expiration: "none"},
 		{Rule: "LIMIT_ENDPOINT_RATE", Target: "192.0.2.6", Parameter: "10/second", Endpoints: "/login,/api/export", Expiration: "none"},
-		{Rule: "LIMIT_RATE_SLOW", Target: "192.0.2.7", Expiration: "none"},
+		{Rule: "LIMIT_RATE_SLOW", Target: "0.0.0.0/0", Expiration: "none"},
 		{Rule: "REJECT", Target: "192.0.2.8", Expiration: "none"},
-		{Rule: "TIMEOUT", Target: "192.0.2.9", Parameter: "5s", Expiration: "none"},
+		{Rule: "TIMEOUT", Target: "0.0.0.0/0", Parameter: "5s", Expiration: "none"},
 	}
 	if len(drafts) != len(knownActions) {
 		t.Fatalf("test drafts cover %d rules, want all %d known actions", len(drafts), len(knownActions))
 	}
 	for _, draft := range drafts {
 		target := draft.Target
-		if draft.Rule != "LIMIT_ENDPOINT_RATE" {
+		if draft.Rule != "LIMIT_ENDPOINT_RATE" && !strings.Contains(target, "/") {
 			target += "/32"
 		}
 		policy := map[string]any{
@@ -307,9 +307,9 @@ func TestVerifyRulePersistedForEveryRuleType(t *testing.T) {
 		}
 		switch draft.Rule {
 		case "DROP", "REJECT", "LIMIT_CONCURRENT", "LIMIT_CONN_RATE":
-			nftState.Rules[target] = policy
+			nftState.Rules[draft.Rule+"|"+target] = policy
 		default:
-			haState.Rules[target] = policy
+			haState.Rules[draft.Rule+"|"+target] = policy
 		}
 	}
 	if err := saveRuleState(paths.NFTState, nftState); err != nil {
@@ -324,6 +324,10 @@ func TestVerifyRulePersistedForEveryRuleType(t *testing.T) {
 				t.Fatalf("verifyRulePersisted() error = %v", err)
 			}
 		})
+	}
+	counts, total, err := countRules(paths)
+	if err != nil || total != len(drafts) || counts["TIMEOUT"] != 1 {
+		t.Fatalf("countRules() = counts %#v, total %d, err %v", counts, total, err)
 	}
 
 	missing := drafts[len(drafts)-1]
