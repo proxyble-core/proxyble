@@ -437,7 +437,7 @@ func verifyRulePersisted(paths rulePaths, draft ruleDraft) error {
 		expectedDuration = ""
 	}
 	for key, policy := range state.Rules {
-		target := firstNonEmpty(valueString(policy["ip"]), key)
+		target := ruleStateTarget(policy, key)
 		if target != expectedTarget ||
 			strings.ToUpper(valueString(policy["action"])) != draft.Rule ||
 			valueString(policy["parameter"]) != draft.Parameter ||
@@ -449,6 +449,16 @@ func verifyRulePersisted(paths rulePaths, draft ruleDraft) error {
 		return nil
 	}
 	return fmt.Errorf("rule agent did not persist active %s rule for %s in %s", draft.Rule, draft.Target, path)
+}
+
+func ruleStateTarget(policy map[string]any, key string) string {
+	if target := valueString(policy["ip"]); target != "" {
+		return target
+	}
+	if _, target, ok := strings.Cut(key, "|"); ok {
+		return target
+	}
+	return key
 }
 
 func canonicalEndpointList(value string) string {
@@ -1453,7 +1463,7 @@ func loadMatchingRules(inputIP netip.Addr, paths rulePaths) ([]ruleMatch, error)
 			if !policyActive(policy) {
 				continue
 			}
-			target := firstNonEmpty(valueString(policy["ip"]), key)
+			target := ruleStateTarget(policy, key)
 			if !targetContainsIP(target, inputIP) {
 				continue
 			}

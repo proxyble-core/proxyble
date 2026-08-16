@@ -441,7 +441,7 @@ func TestNormalizeStateRuleKeys(t *testing.T) {
 	state := normalizeStateRuleKeys(map[string]Rule{
 		"192.0.2.10": {IP: "192.0.2.10", Action: ActionLimitRateSlow, System: SystemHAProxy},
 	})
-	if _, exists := state["192.0.2.10/32"]; !exists {
+	if _, exists := state[ActionLimitRateSlow+"|192.0.2.10/32"]; !exists {
 		t.Fatalf("expected legacy singleton IP state to normalize to /32: %#v", state)
 	}
 }
@@ -468,13 +468,26 @@ func TestLoadStateTreatsEmptyFileAsEmptyState(t *testing.T) {
 func TestLoadInputRotatesAndRecreatesInbox(t *testing.T) {
 	dir := t.TempDir()
 	inbox := filepath.Join(dir, "inbox.tmp")
-	if err := os.WriteFile(inbox, []byte("DROP 192.0.2.10 10s\n"), inboxFileMode); err != nil {
+	batch := "LIMIT_CONN_RATE 0.0.0.0/0 25/second\nLIMIT_CONCURRENT 0.0.0.0/0 50\nLIMIT_RATE_SLOW 0.0.0.0/0\nBUSY_DEFLECTION 0.0.0.0/0\nTIMEOUT 0.0.0.0/0 5s\nLIMIT_CONN_RATE 0.0.0.0/0 30/second\n"
+	if err := os.WriteFile(inbox, []byte(batch), inboxFileMode); err != nil {
 		t.Fatal(err)
 	}
 
 	rules := loadInput(inbox, time.Unix(1000, 0))
-	if _, ok := rules["192.0.2.10/32"]; !ok {
-		t.Fatalf("expected rule parsed from rotated inbox, got %#v", rules)
+	if len(rules) != 5 {
+		t.Fatalf("expected all rules for the shared target, got %#v", rules)
+	}
+	for _, action := range []string{ActionLimitConnRate, ActionLimitConcurrent, ActionLimitRateSlow, ActionBusyDeflection, ActionTimeout} {
+		if _, ok := rules[action+"|0.0.0.0/0"]; !ok {
+			t.Errorf("missing %s rule from rotated inbox", action)
+		}
+	}
+	if got := rules[ActionLimitConnRate+"|0.0.0.0/0"].Parameter; got != "30/second" {
+		t.Fatalf("same-action update was not retained: %q", got)
+	}
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveState(statePath, State{Rules: rules}); err != nil || len(loadState(statePath).Rules) != 5 {
+		t.Fatalf("shared-target rules did not persist: %v", err)
 	}
 	if _, err := os.Stat(inbox + ".processing"); !os.IsNotExist(err) {
 		t.Fatalf("processing file should be removed after loadInput, err=%v", err)

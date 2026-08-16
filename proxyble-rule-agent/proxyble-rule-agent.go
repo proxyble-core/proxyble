@@ -818,7 +818,7 @@ func loadInput(path string, now time.Time) map[string]Rule {
 			log.Printf("ACTION=SKIPPED MSG=%q LINE=%q", err.Error(), line)
 			continue
 		}
-		out[p.IP] = p
+		out[stateRuleKey(p)] = p
 	}
 	if err := scanner.Err(); err != nil {
 		log.Printf("ERROR ACTION=READ_INPUT FILE=%s MSG=\"%v\"", procPath, err)
@@ -1392,9 +1392,13 @@ func normalizeStateRuleKeys(rules map[string]Rule) map[string]Rule {
 				p.IP = target
 			}
 		}
-		normalized[p.IP] = p
+		normalized[stateRuleKey(p)] = p
 	}
 	return normalized
+}
+
+func stateRuleKey(p Rule) string {
+	return p.Action + "|" + p.IP
 }
 
 // saveState writes the current state to JSON for persistence
