@@ -70,7 +70,7 @@ sudo ./proxyble --install --with-riodb --yes --accept-license
 
 When RioDB analytics is selected, Proxyble looks for the configured RioDB
 archive in `bin/`. If it is not present, Proxyble downloads it from the servers
-listed in `bin/riodb-settings.json` before continuing.
+listed in `bin/dependencies.json` before continuing.
 
 
 Previous: [Guide index](README.md)  

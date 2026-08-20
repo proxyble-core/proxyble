@@ -77,8 +77,8 @@ sudo proxyble --yes --rules-reset --type LIMIT_CONN_RATE
 ```
 
 Expiration values can be temporary, such as `10s`, `30m`, `1h`, or `1d`.
-Leaving the interactive expiration blank creates a permanent rule. In CLI mode,
-use `--expiration none` for a permanent rule.
+Leaving the interactive expiration blank or omitting `--expiration` in CLI mode
+creates a permanent rule. CLI callers may also use `--expiration none`.
 
 ## Allow-List
 

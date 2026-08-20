@@ -22,7 +22,7 @@ PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_APP_DIR="$PROJECT_DIR"
 SOURCE_GO_DIR="$SOURCE_APP_DIR/src"
 RULE_AGENT_SRC_DIR="$SOURCE_APP_DIR/proxyble-rule-agent"
-RIODB_SETTINGS="$SOURCE_APP_DIR/bin/riodb-settings.json"
+DEPENDENCIES="$SOURCE_APP_DIR/bin/dependencies.json"
 BUILD_DIR="$(mktemp -d /tmp/proxyble-stage.XXXXXX)"
 STAGED_PROXYBLE="$BUILD_DIR/proxyble"
 STAGED_RULE_AGENT="$BUILD_DIR/proxyble-rule-agent"
@@ -38,8 +38,8 @@ if [[ ! -f "$RULE_AGENT_SRC_DIR/go.mod" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$RIODB_SETTINGS" ]]; then
-    echo "[ERROR] Missing RioDB settings file: $RIODB_SETTINGS" >&2
+if [[ ! -f "$DEPENDENCIES" ]]; then
+    echo "[ERROR] Missing dependency settings file: $DEPENDENCIES" >&2
     exit 1
 fi
 
@@ -135,20 +135,18 @@ sudo install -o root -g root -m 700 "$STAGED_PROXYBLE" /opt/proxyble/proxyble
 echo "[INFO] Installing freshly built proxyble-rule-agent binary into staged tree"
 sudo install -o root -g root -m 700 "$STAGED_RULE_AGENT" /opt/proxyble/bin/proxyble-rule-agent
 
-riodb_archive_path="$(awk -F'"' '/"archive_path"[[:space:]]*:/ { print $4; exit }' "$RIODB_SETTINGS")"
+riodb_archive_path="$(awk -F'"' '/"archive_path"[[:space:]]*:/ { print $4; exit }' "$DEPENDENCIES")"
 if [[ -z "$riodb_archive_path" ]]; then
-    echo "[ERROR] Missing riodb.archive_path in $RIODB_SETTINGS" >&2
+    echo "[ERROR] Missing dependencies.riodb.archive_path in $DEPENDENCIES" >&2
     exit 1
 fi
 if [[ "$riodb_archive_path" == /* || "$riodb_archive_path" == *..* ]]; then
-    echo "[ERROR] riodb.archive_path must be relative to $SOURCE_APP_DIR/bin" >&2
+    echo "[ERROR] dependencies.riodb.archive_path must be relative to $SOURCE_APP_DIR/bin" >&2
     exit 1
 fi
 
-if [[ -e /usr/local/bin/proxyble ]]; then
-    echo "[INFO] Updating active /usr/local/bin/proxyble binary"
-    sudo install -o root -g root -m 755 "$STAGED_PROXYBLE" /usr/local/bin/proxyble
-fi
+echo "[INFO] Installing active /usr/local/bin/proxyble binary"
+sudo install -o root -g root -m 755 "$STAGED_PROXYBLE" /usr/local/bin/proxyble
 
 if [[ -e /usr/local/bin/proxyble-rule-agent ]]; then
     echo "[INFO] Updating active /usr/local/bin/proxyble-rule-agent binary"
@@ -173,4 +171,4 @@ else
 fi
 
 echo "to run proxyble, type:"
-echo "sudo /opt/proxyble/proxyble"
+echo "sudo proxyble"

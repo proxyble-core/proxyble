@@ -24,12 +24,16 @@ package main
 // policies.go, while shared OS helpers belong in system.go.
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 )
+
+const proxybleVersion = "2026-7.1"
 
 // actionAliases maps all accepted CLI spellings to the canonical action names
 // used by runCLIAction. Keep compatibility aliases here so older scripts and
@@ -75,10 +79,40 @@ var actionAliases = map[string]string{
 // here so lower-level functions can return ordinary errors.
 func main() {
 	ctx := context.Background()
+	file, globalArgs, fileMode, err := parseCommandFileInvocation(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if fileMode {
+		executable, err := os.Executable()
+		if err == nil {
+			err = runCommandFile(file, globalArgs, func(args []string) error {
+				cmd := exec.CommandContext(ctx, executable, args...)
+				cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+				return cmd.Run()
+			})
+		}
+		if err != nil {
+			if !contains(globalArgs, "-s") && !contains(globalArgs, "--silent") {
+				fmt.Fprintln(os.Stderr, "[ERROR]", err)
+			}
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				os.Exit(exitErr.ExitCode())
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	app, help, err := parseGlobalArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	if app.ShowVersion {
+		fmt.Println(proxybleVersion)
+		return
 	}
 	if help {
 		if app.Action != "" {
@@ -102,13 +136,13 @@ func main() {
 		os.Exit(1)
 	}
 	app.SourceRoot = findResourceRoot()
-	settings, settingsPath, err := loadRuntimeSettings(app.SourceRoot)
+	dependencies, dependenciesPath, err := loadDependencySettings(app.SourceRoot)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "[ERROR]", err)
 		os.Exit(1)
 	}
-	app.Settings = settings
-	app.SettingsPath = settingsPath
+	app.Dependencies = dependencies
+	app.DependenciesPath = dependenciesPath
 	if err := requireRoot(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -139,6 +173,62 @@ func main() {
 	}
 }
 
+func parseCommandFileInvocation(args []string) (string, []string, bool, error) {
+	var file string
+	var globals []string
+	for _, arg := range args {
+		switch arg {
+		case "-y", "--yes", "-v", "--verbose", "-s", "--silent":
+			globals = append(globals, arg)
+		default:
+			if !strings.HasPrefix(arg, "@") {
+				return "", nil, false, nil
+			}
+			if len(arg) == 1 {
+				return "", nil, false, fmt.Errorf("[ERROR] @ requires a command file path")
+			}
+			if file != "" {
+				return "", nil, false, fmt.Errorf("[ERROR] Only one command file can be executed at a time")
+			}
+			file = arg[1:]
+		}
+	}
+	return file, globals, file != "", nil
+}
+
+func runCommandFile(path string, globals []string, run func([]string) error) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for line := 1; scanner.Scan(); line++ {
+		args := strings.Fields(scanner.Text())
+		for i, arg := range args {
+			if strings.HasPrefix(arg, "#") {
+				args = args[:i]
+				break
+			}
+		}
+		if len(args) == 0 {
+			continue
+		}
+		merged := args[:0]
+		for _, arg := range args {
+			if (contains(globals, "-s") || contains(globals, "--silent")) && (arg == "-v" || arg == "--verbose") ||
+				(contains(globals, "-v") || contains(globals, "--verbose")) && (arg == "-s" || arg == "--silent") {
+				continue
+			}
+			merged = append(merged, arg)
+		}
+		if err := run(append(merged, globals...)); err != nil {
+			return fmt.Errorf("%s:%d: %w", path, line, err)
+		}
+	}
+	return scanner.Err()
+}
+
 func ensureAppConfig(a *App) error {
 	if a.Config != nil {
 		return nil
@@ -148,7 +238,7 @@ func ensureAppConfig(a *App) error {
 		return err
 	}
 	a.Config = cfg
-	return applySettingsConfigDefaults(a.Config, a.Settings, created)
+	return applyDependencyConfigDefaults(a.Config, a.Dependencies, created)
 }
 
 // parseGlobalArgs separates global flags, one action, and action-specific
@@ -162,6 +252,9 @@ func parseGlobalArgs(args []string) (*App, bool, error) {
 		switch arg {
 		case "-v", "--verbose":
 			app.Verbose = true
+		case "-V", "--version":
+			app.CommandLine = true
+			app.ShowVersion = true
 		case "-y", "--yes":
 			app.CommandLine = true
 			app.AssumeYes = true
@@ -193,7 +286,7 @@ func parseGlobalArgs(args []string) (*App, bool, error) {
 			}
 		}
 	}
-	if app.CommandLine && app.Action == "" && !help {
+	if app.CommandLine && app.Action == "" && !help && !app.ShowVersion {
 		return nil, false, fmt.Errorf("[ERROR] Command-line flags require an action. Run proxyble --help to list actions")
 	}
 	if app.Action == "--installation-add-riodb" && app.AssumeYes && !contains(app.Args, "--accept-license") {
@@ -1055,13 +1148,16 @@ func runRulesMenu(ctx context.Context, a *App) error {
 // printGlobalHelp emits the compact action inventory for CLI users.
 func printGlobalHelp() {
 	fmt.Print(`Usage: proxyble [action] [action flags] [global flags]
+       proxyble [global flags] @FILE
 
 Without an action, proxyble starts the interactive wizard.
+@FILE executes its CLI command lines sequentially and stops on the first failure.
 
 Global flags:
   -y, --yes       Accept confirmations for the selected action.
   -s, --silent    Print nothing to the terminal.
   -v, --verbose   Print detailed action logs to the terminal.
+  -V, --version   Print the Proxyble version and exit.
   -h, --help      Print this help, or action help when used with an action.
 
 Actions:
@@ -1107,6 +1203,7 @@ func printActionHelp(action string) {
 		fmt.Println("Usage: proxyble --installation-remove [--remove-java|--keep-java] [global flags]")
 	case "--config-listener":
 		fmt.Println("Usage: proxyble --config-listener --mode tcp|http|https --port PORT --timeout VALUE [flags] [global flags]")
+		fmt.Println("HTTPS certificate: --certificate-path PATH | --make-cert-local-ip | --make-cert-local-hostname | --make-cert-public-ip IP | --make-cert-fqdn NAME")
 	case "--config-backend":
 		fmt.Println("Usage: proxyble --config-backend --primary-host HOST --primary-port PORT [flags] [global flags]")
 	case "--config-start":
@@ -1118,7 +1215,7 @@ func printActionHelp(action string) {
 	case "--policies-remove":
 		fmt.Println("Usage: proxyble --policies-remove --policy POLICY [--restart-riodb] [global flags]")
 	case "--rules-add":
-		fmt.Println("Usage: proxyble --rules-add --rule TYPE --target IP_OR_CIDR --expiration VALUE [rule flags] [global flags]")
+		fmt.Println("Usage: proxyble --rules-add --rule TYPE --target IP_OR_CIDR [--expiration VALUE] [rule flags] [global flags]")
 	case "--rules-check":
 		fmt.Println("Usage: proxyble --rules-check --ip IP [--remove] [selector flags] [global flags]")
 	case "--rules-reset":

@@ -1,0 +1,36 @@
+{
+  "dependencies": {
+    "java": {
+      "version": "17",
+      "default": {
+        "package": "openjdk-17-jre-headless",
+        "label": "OpenJDK Java 17 (headless)"
+      },
+      "by_os": {
+        "amazon": {
+          "package": "java-17-amazon-corretto-headless",
+          "label": "Amazon Corretto Java 17 (headless)"
+        },
+        "azure": {
+          "package": "msopenjdk-17",
+          "label": "Microsoft Build of OpenJDK 17"
+        },
+        "rhel": {
+          "package": "java-17-openjdk-headless",
+          "label": "OpenJDK Java 17 (headless)"
+        }
+      }
+    },
+    "riodb": {
+      "archive_path": "riodb-lin-x86-2026-3.tar.gz",
+      "download_servers": [
+        "https://www.riodb.co/download/"
+      ]
+    },
+    "haproxy": {
+      "package": "haproxy",
+      "min_version_supported": "2.8.0",
+      "max_version_exclusive": "3.1.0"
+    }
+  }
+}

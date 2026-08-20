@@ -21,9 +21,55 @@ package main
 // before Proxyble has enough runtime configuration to use them.
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRunCommandFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commands.txt")
+	contents := "\n # comment\n--rules-list --silent # trailing comment\n--config-status\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	err := runCommandFile(path, []string{"--verbose", "--yes"}, func(args []string) error {
+		got = append(got, strings.Join(args, " "))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("runCommandFile returned error: %v", err)
+	}
+	want := []string{"--rules-list --verbose --yes", "--config-status --verbose --yes"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("commands = %#v, want %#v", got, want)
+	}
+}
+
+func TestRunCommandFileStopsOnFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commands.txt")
+	if err := os.WriteFile(path, []byte("--rules-list\n--config-status\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("failed")
+	runs := 0
+	err := runCommandFile(path, nil, func([]string) error { runs++; return wantErr })
+	if !errors.Is(err, wantErr) || runs != 1 {
+		t.Fatalf("error = %v, runs = %d; want wrapped failure after one run", err, runs)
+	}
+}
+
+func TestParseCommandFileInvocation(t *testing.T) {
+	file, globals, ok, err := parseCommandFileInvocation([]string{"--yes", "@rules.txt", "-s"})
+	if err != nil || !ok || file != "rules.txt" || strings.Join(globals, " ") != "--yes -s" {
+		t.Fatalf("got file=%q globals=%v ok=%t err=%v", file, globals, ok, err)
+	}
+	if _, _, _, err := parseCommandFileInvocation([]string{"@one", "@two"}); err == nil {
+		t.Fatal("multiple command files should fail")
+	}
+}
 
 func TestParseGlobalArgsVerboseOnlyKeepsWizardMode(t *testing.T) {
 	app, help, err := parseGlobalArgs([]string{"--verbose"})
@@ -44,6 +90,26 @@ func TestParseGlobalArgsVerboseOnlyKeepsWizardMode(t *testing.T) {
 func TestParseGlobalArgsNonVerboseFlagRequiresAction(t *testing.T) {
 	if _, _, err := parseGlobalArgs([]string{"--yes"}); err == nil {
 		t.Fatalf("--yes without an action should fail instead of opening the wizard")
+	}
+}
+
+func TestParseGlobalArgsVersionFlagsExitWithoutAction(t *testing.T) {
+	for _, flag := range []string{"--version", "-V"} {
+		t.Run(flag, func(t *testing.T) {
+			app, help, err := parseGlobalArgs([]string{flag})
+			if err != nil {
+				t.Fatalf("parseGlobalArgs returned error: %v", err)
+			}
+			if help {
+				t.Fatalf("help should be false")
+			}
+			if !app.ShowVersion {
+				t.Fatalf("%s should request version output", flag)
+			}
+			if app.Action != "" {
+				t.Fatalf("action = %q, want empty", app.Action)
+			}
+		})
 	}
 }
 
@@ -208,7 +274,7 @@ func TestInstallAcceptanceMenuCombinesAcceptanceWithInstall(t *testing.T) {
 		if got := items[0][1]; got != tt.description {
 			t.Fatalf("acceptance description = %q, want %q", got, tt.description)
 		}
-		if got, want := items[len(items)-1], [2]string{"back", "Return to previous menu"}; got != want {
+		if got, want := items[len(items)-1], [2]string{"cancel", "Do not accept or install"}; got != want {
 			t.Fatalf("last install acceptance item = %#v, want %#v", got, want)
 		}
 		if got, want := menuLabelWidth(items, 14), 14; got != want {
@@ -263,18 +329,18 @@ func TestInstallRepairMenuDescriptionUsesTwoColumnCopy(t *testing.T) {
 	}
 }
 
-func TestLicenseAcceptanceMenuUsesExplicitAcceptDeclineText(t *testing.T) {
+func TestLicenseAcceptanceMenuUsesAcceptAndCancel(t *testing.T) {
 	items := licenseAcceptanceMenuItems()
-	for _, tag := range []string{acceptLicenses, declineLicenses} {
+	for _, tag := range []string{acceptLicenses, "cancel"} {
 		if !hasMenuTag(items, tag) {
 			t.Fatalf("license acceptance menu missing %s: %#v", tag, items)
 		}
 	}
 }
 
-func TestOpenSourceNoticeAcceptanceMenuUsesExplicitText(t *testing.T) {
+func TestOpenSourceNoticeAcceptanceMenuUsesAcknowledgeAndCancel(t *testing.T) {
 	items := openSourceNoticeAcceptanceMenuItems()
-	for _, tag := range []string{acknowledgeNotices, declineLicenses} {
+	for _, tag := range []string{acknowledgeNotices, "cancel"} {
 		if !hasMenuTag(items, tag) {
 			t.Fatalf("open-source notice acceptance menu missing %s: %#v", tag, items)
 		}
@@ -283,7 +349,7 @@ func TestOpenSourceNoticeAcceptanceMenuUsesExplicitText(t *testing.T) {
 
 func TestRioDBLicenseAcceptanceMenuMentionsJavaNoticeWhenShown(t *testing.T) {
 	items := rioDBLicenseAcceptanceMenuItems(true)
-	if !hasMenuTag(items, acceptRioDBJavaLicense) || !hasMenuTag(items, declineLicenses) {
+	if !hasMenuTag(items, acceptRioDBJavaLicense) || !hasMenuTag(items, "cancel") {
 		t.Fatalf("RioDB license acceptance menu missing expected choices: %#v", items)
 	}
 	if !strings.Contains(acceptRioDBJavaLicense, "Java notices") {
@@ -293,7 +359,7 @@ func TestRioDBLicenseAcceptanceMenuMentionsJavaNoticeWhenShown(t *testing.T) {
 
 func TestRioDBLicenseAcceptanceMenuOmitsJavaWhenNoticeHidden(t *testing.T) {
 	items := rioDBLicenseAcceptanceMenuItems(false)
-	if !hasMenuTag(items, acceptRioDBLicense) || !hasMenuTag(items, declineLicenses) {
+	if !hasMenuTag(items, acceptRioDBLicense) || !hasMenuTag(items, "cancel") {
 		t.Fatalf("RioDB license acceptance menu missing expected choices: %#v", items)
 	}
 	if strings.Contains(acceptRioDBLicense, "Java") {

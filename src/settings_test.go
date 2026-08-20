@@ -16,7 +16,7 @@
 
 package main
 
-// settings_test.go covers runtime settings behavior that lets release metadata
+// settings_test.go covers dependency settings behavior that lets release metadata
 // change without recompiling Proxyble.
 
 import (
@@ -25,10 +25,10 @@ import (
 	"testing"
 )
 
-// TestRuntimeSettingsJavaPackageUsesDebianFallback ensures apt-based OS
+// TestDependencySettingsJavaPackageUsesDebianFallback ensures apt-based OS
 // families use the default OpenJDK package.
-func TestRuntimeSettingsJavaPackageUsesDebianFallback(t *testing.T) {
-	settings := defaultRuntimeSettings()
+func TestDependencySettingsJavaPackageUsesDebianFallback(t *testing.T) {
+	settings := defaultDependencySettings()
 	pkg, err := settings.JavaPackage(platformFamilyDebian)
 	if err != nil {
 		t.Fatalf("JavaPackage returned error: %v", err)
@@ -38,10 +38,10 @@ func TestRuntimeSettingsJavaPackageUsesDebianFallback(t *testing.T) {
 	}
 }
 
-// TestRuntimeSettingsJavaPackageUsesAmazonOverride ensures Amazon Linux keeps
+// TestDependencySettingsJavaPackageUsesAmazonOverride ensures Amazon Linux keeps
 // the Corretto override.
-func TestRuntimeSettingsJavaPackageUsesAmazonOverride(t *testing.T) {
-	settings := defaultRuntimeSettings()
+func TestDependencySettingsJavaPackageUsesAmazonOverride(t *testing.T) {
+	settings := defaultDependencySettings()
 	pkg, err := settings.JavaPackage(platformFamilyAmazon)
 	if err != nil {
 		t.Fatalf("JavaPackage returned error: %v", err)
@@ -51,8 +51,8 @@ func TestRuntimeSettingsJavaPackageUsesAmazonOverride(t *testing.T) {
 	}
 }
 
-func TestRuntimeSettingsJavaPackageUsesRHELOverride(t *testing.T) {
-	settings := defaultRuntimeSettings()
+func TestDependencySettingsJavaPackageUsesRHELOverride(t *testing.T) {
+	settings := defaultDependencySettings()
 	pkg, err := settings.JavaPackage(platformFamilyRHEL)
 	if err != nil {
 		t.Fatalf("JavaPackage returned error: %v", err)
@@ -62,8 +62,8 @@ func TestRuntimeSettingsJavaPackageUsesRHELOverride(t *testing.T) {
 	}
 }
 
-func TestRuntimeSettingsJavaPackageUsesAzureOverride(t *testing.T) {
-	settings := defaultRuntimeSettings()
+func TestDependencySettingsJavaPackageUsesAzureOverride(t *testing.T) {
+	settings := defaultDependencySettings()
 	pkg, err := settings.JavaPackage(platformFamilyAzure)
 	if err != nil {
 		t.Fatalf("JavaPackage returned error: %v", err)
@@ -73,41 +73,48 @@ func TestRuntimeSettingsJavaPackageUsesAzureOverride(t *testing.T) {
 	}
 }
 
-func TestRuntimeSettingsUsesCurrentRioDBArchive(t *testing.T) {
-	settings := defaultRuntimeSettings()
-	if settings.RioDB.ArchivePath != "riodb-lin-x86.2026-3.tar.gz" {
-		t.Fatalf("RioDB archive path = %q, want current 2026-3 archive", settings.RioDB.ArchivePath)
+func TestDependencySettingsUsesCurrentRioDBArchive(t *testing.T) {
+	settings := defaultDependencySettings()
+	if settings.Dependencies.RioDB.ArchivePath != "riodb-lin-x86.2026-3.tar.gz" {
+		t.Fatalf("RioDB archive path = %q, want current 2026-3 archive", settings.Dependencies.RioDB.ArchivePath)
 	}
 }
 
-func TestRuntimeSettingsIncludesRioDBDownloadServers(t *testing.T) {
-	settings := defaultRuntimeSettings()
-	if len(settings.RioDB.DownloadServers) == 0 {
+func TestDependencySettingsIncludesRioDBDownloadServers(t *testing.T) {
+	settings := defaultDependencySettings()
+	if len(settings.Dependencies.RioDB.DownloadServers) == 0 {
 		t.Fatalf("default settings should include RioDB download servers")
 	}
 }
 
-func TestRuntimeSettingsLoadsRioDBDownloadServers(t *testing.T) {
+func TestDependencySettingsLoadsRioDBDownloadServers(t *testing.T) {
 	root := t.TempDir()
-	settingsPath := filepath.Join(root, "bin", defaultSettingsName)
+	settingsPath := filepath.Join(root, "bin", defaultDependenciesName)
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	body := `{
-  "riodb": {
+  "dependencies": {
+    "haproxy": {
+      "package": "haproxy",
+      "min_version_supported": "2.8.0",
+      "max_version_exclusive": "3.1.0"
+    },
+    "riodb": {
     "archive_path": "riodb-test.tar.gz",
     "download_servers": ["http://downloads.example.test/riodb/"]
+  }
   }
 }`
 	if err := os.WriteFile(settingsPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	settings, _, err := loadRuntimeSettings(root)
+	settings, _, err := loadDependencySettings(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settings.RioDB.DownloadServers) != 1 || settings.RioDB.DownloadServers[0] != "http://downloads.example.test/riodb/" {
-		t.Fatalf("download servers = %#v", settings.RioDB.DownloadServers)
+	if len(settings.Dependencies.RioDB.DownloadServers) != 1 || settings.Dependencies.RioDB.DownloadServers[0] != "http://downloads.example.test/riodb/" {
+		t.Fatalf("download servers = %#v", settings.Dependencies.RioDB.DownloadServers)
 	}
 }

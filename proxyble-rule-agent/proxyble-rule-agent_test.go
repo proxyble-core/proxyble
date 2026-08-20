@@ -89,6 +89,7 @@ func TestParseSampleRules(t *testing.T) {
 	}{
 		{"limit_bandwidth 192.0.40.85 15mb 10s", ActionLimitBandwidth, SystemHAProxy, "192.0.40.85/32", "15mb", "10s"},
 		{"LIMIT_BANDWIDTH 192.0.105.0/24 10mb", ActionLimitBandwidth, SystemHAProxy, "192.0.105.0/24", "10mb", ""},
+		{"LIMIT_BANDWIDTH 192.0.106.0/24 1gb", ActionLimitBandwidth, SystemHAProxy, "192.0.106.0/24", "1gb", ""},
 		{"drop 192.0.81.141", ActionDrop, SystemNFTables, "192.0.81.141/32", "", ""},
 		{"DROP 192.0.166.0/24 10s", ActionDrop, SystemNFTables, "192.0.166.0/24", "", "10s"},
 		{"reject 192.0.69.0/24 10s", ActionReject, SystemNFTables, "192.0.69.0/24", "", "10s"},
@@ -99,6 +100,7 @@ func TestParseSampleRules(t *testing.T) {
 		{"LIMIT_CONN_RATE 192.0.216.0/24 20/second", ActionLimitConnRate, SystemNFTables, "192.0.216.0/24", "20/second", ""},
 		{"timeout 192.0.132.87 5s 10s", ActionTimeout, SystemHAProxy, "192.0.132.87/32", "5s", "10s"},
 		{"TIMEOUT 192.0.221.0/24 10s", ActionTimeout, SystemHAProxy, "192.0.221.0/24", "10s", ""},
+		{"TIMEOUT 192.0.222.0/24 500ms", ActionTimeout, SystemHAProxy, "192.0.222.0/24", "500ms", ""},
 		{"limit_rate_slow 192.0.29.43 10s", ActionLimitRateSlow, SystemHAProxy, "192.0.29.43/32", "", "10s"},
 		{"LIMIT_RATE_SLOW 192.0.91.0/24", ActionLimitRateSlow, SystemHAProxy, "192.0.91.0/24", "", ""},
 		{"busy_deflection 192.0.28.210 10s", ActionBusyDeflection, SystemHAProxy, "192.0.28.210/32", "", "10s"},
@@ -326,6 +328,25 @@ func TestBuildHAProxyPayload(t *testing.T) {
 	mustNotContain(t, payload, ";")
 }
 
+func TestResolveHAProxyMapRefsFromHAProxy3Output(t *testing.T) {
+	output := `# id (file) description
+0 (/var/lib/haproxy/etc/haproxy/maps/rules.map) pattern loaded from file
+1 (/var/lib/haproxy/etc/haproxy/maps/params.map) pattern loaded from file
+2 (/var/lib/haproxy/etc/haproxy/maps/endpoint-rates.map) pattern loaded from file
+`
+	refs, err := mapRefsFromShowMap(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs.rules != "#0" || refs.params != "#1" || refs.endpointRates != "#2" {
+		t.Fatalf("resolved refs = %+v, want #0, #1, #2", refs)
+	}
+	commands := strings.Join(buildHAProxyCommandsForRefs(State{Rules: map[string]Rule{}}, refs), "\n")
+	mustContain(t, commands, "clear map #0")
+	mustContain(t, commands, "clear map #1")
+	mustContain(t, commands, "clear map #2")
+}
+
 func TestBuildHAProxyMapBodies(t *testing.T) {
 	state := State{Rules: map[string]Rule{
 		"192.0.2.20/32": {IP: "192.0.2.20/32", Action: ActionLimitBandwidth, System: SystemHAProxy, Parameter: "15mb"},
@@ -420,7 +441,7 @@ func TestNormalizeStateRuleKeys(t *testing.T) {
 	state := normalizeStateRuleKeys(map[string]Rule{
 		"192.0.2.10": {IP: "192.0.2.10", Action: ActionLimitRateSlow, System: SystemHAProxy},
 	})
-	if _, exists := state["192.0.2.10/32"]; !exists {
+	if _, exists := state[ActionLimitRateSlow+"|192.0.2.10/32"]; !exists {
 		t.Fatalf("expected legacy singleton IP state to normalize to /32: %#v", state)
 	}
 }
@@ -447,13 +468,26 @@ func TestLoadStateTreatsEmptyFileAsEmptyState(t *testing.T) {
 func TestLoadInputRotatesAndRecreatesInbox(t *testing.T) {
 	dir := t.TempDir()
 	inbox := filepath.Join(dir, "inbox.tmp")
-	if err := os.WriteFile(inbox, []byte("DROP 192.0.2.10 10s\n"), inboxFileMode); err != nil {
+	batch := "LIMIT_CONN_RATE 0.0.0.0/0 25/second\nLIMIT_CONCURRENT 0.0.0.0/0 50\nLIMIT_RATE_SLOW 0.0.0.0/0\nBUSY_DEFLECTION 0.0.0.0/0\nTIMEOUT 0.0.0.0/0 5s\nLIMIT_CONN_RATE 0.0.0.0/0 30/second\n"
+	if err := os.WriteFile(inbox, []byte(batch), inboxFileMode); err != nil {
 		t.Fatal(err)
 	}
 
 	rules := loadInput(inbox, time.Unix(1000, 0))
-	if _, ok := rules["192.0.2.10/32"]; !ok {
-		t.Fatalf("expected rule parsed from rotated inbox, got %#v", rules)
+	if len(rules) != 5 {
+		t.Fatalf("expected all rules for the shared target, got %#v", rules)
+	}
+	for _, action := range []string{ActionLimitConnRate, ActionLimitConcurrent, ActionLimitRateSlow, ActionBusyDeflection, ActionTimeout} {
+		if _, ok := rules[action+"|0.0.0.0/0"]; !ok {
+			t.Errorf("missing %s rule from rotated inbox", action)
+		}
+	}
+	if got := rules[ActionLimitConnRate+"|0.0.0.0/0"].Parameter; got != "30/second" {
+		t.Fatalf("same-action update was not retained: %q", got)
+	}
+	statePath := filepath.Join(dir, "state.json")
+	if err := saveState(statePath, State{Rules: rules}); err != nil || len(loadState(statePath).Rules) != 5 {
+		t.Fatalf("shared-target rules did not persist: %v", err)
 	}
 	if _, err := os.Stat(inbox + ".processing"); !os.IsNotExist(err) {
 		t.Fatalf("processing file should be removed after loadInput, err=%v", err)

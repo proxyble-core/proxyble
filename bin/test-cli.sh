@@ -225,8 +225,7 @@ run_proxyble "rules add DROP" --rules-add --yes \
 run_proxyble "rules add LIMIT_BANDWIDTH" --rules-add --yes \
     --rule LIMIT_BANDWIDTH \
     --target 192.0.2.12 \
-    --bandwidth 10mb \
-    --expiration 10m || exit 1
+    --bandwidth 10mb || exit 1
 run_proxyble "rules add LIMIT_CONCURRENT" --rules-add --yes \
     --rule LIMIT_CONCURRENT \
     --target 192.0.2.13 \

@@ -61,7 +61,7 @@ func TestLicenseDisplayLinesIncludeOpenSourceNoticeAndRioDBEULA(t *testing.T) {
 		"Installed when: RioDB analytics is selected and no working Java runtime is already present",
 		"Package: Java 17 headless runtime from the operating system package manager",
 		"Distribution: OpenJDK Java 17 (headless)",
-		"Settings: The exact Java version and package are configured in proxyble/bin/riodb-settings.json",
+		"Settings: The exact Java version and package are configured in proxyble/bin/dependencies.json",
 		"Notice: This dependency is not installed for Core only",
 		"RioDB End User License Agreement:",
 		"RioDB EULA body",
@@ -125,7 +125,7 @@ func TestRioDBLicenseDisplayLinesExcludeCoreNotices(t *testing.T) {
 		"Website: https://www.riodb.co/",
 		"Java JDK: OpenJDK or Amazon Corretto",
 		"Installed when: RioDB analytics is selected and no working Java runtime is already present",
-		"Settings: The exact Java version and package are configured in proxyble/bin/riodb-settings.json",
+		"Settings: The exact Java version and package are configured in proxyble/bin/dependencies.json",
 		"Notice: This dependency is not installed for Core only",
 		"RioDB EULA body",
 	} {
@@ -193,10 +193,8 @@ func testAppWithRioDBArchive(t *testing.T, root, eula string) *App {
 		path.Join("riodb", rioDBEULAPath): eula,
 	})
 	return &App{
-		SourceRoot: root,
-		Settings: RuntimeSettings{RioDB: SettingsRioDB{
-			ArchivePath: archiveName,
-		}},
+		SourceRoot:   root,
+		Dependencies: DependencySettings{Dependencies: Dependencies{RioDB: RioDBDependency{ArchivePath: archiveName}}},
 	}
 }
 
@@ -348,7 +346,7 @@ esac
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	app := &App{Config: &Config{Data: map[string]map[string]string{
+	app := &App{Dependencies: testDependencySettings(), Config: &Config{Data: map[string]map[string]string{
 		"haproxy":  {"installed_by_proxyble": "true"},
 		"nftables": {"installed_by_proxyble": "true"},
 	}}}
@@ -375,7 +373,7 @@ func TestRemoveProxyblePackagesRemovesOwnedPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)
-	app := &App{Config: &Config{Data: map[string]map[string]string{
+	app := &App{Dependencies: testDependencySettings(), Config: &Config{Data: map[string]map[string]string{
 		"haproxy":  {"installed_by_proxyble": "true"},
 		"nftables": {"installed_by_proxyble": "true"},
 	}}}
@@ -461,8 +459,59 @@ func TestValidateListenerCLIOptionsRequiresExplicitParameters(t *testing.T) {
 	}
 
 	opts = listenerOptions{mode: "https", port: "443", timeout: "60s"}
-	if _, err := validateListenerCLIOptions(&opts, "", "", "", ""); err == nil {
-		t.Fatalf("HTTPS listener CLI validation should require certificate input")
+	if _, err := validateListenerCLIOptions(&opts, "", "", "", ""); err == nil || err.Error() != "HTTPS listener mode requires exactly one of --certificate-path|--make-cert-local-ip|--make-cert-local-hostname|--make-cert-public-ip|--make-cert-fqdn" {
+		t.Fatalf("HTTPS listener CLI validation returned %q", err)
+	}
+}
+
+func TestListenerCertificateOptions(t *testing.T) {
+	tests := []struct{ flag, value, target string }{
+		{"--make-cert-local-ip", "", "ip"},
+		{"--make-cert-local-hostname", "", "hostname"},
+		{"--make-cert-public-ip", "203.0.113.8", "ip"},
+		{"--make-cert-fqdn", "proxy.example.com", "fqdn"},
+	}
+	for _, tt := range tests {
+		args := []string{tt.flag}
+		if tt.value != "" {
+			args = append(args, tt.value)
+		}
+		opts, err := parseListenerOptions(args)
+		if err != nil || opts.certificateOptions != 1 || opts.selfSignedFor != tt.target || opts.selfSignedSubject != tt.value {
+			t.Fatalf("parseListenerOptions(%v) = %+v, %v", args, opts, err)
+		}
+	}
+	if got, err := selfSignedSubject("ip", "203.0.113.8"); err != nil || got != "203.0.113.8" {
+		t.Fatalf("public IP subject = %q, %v", got, err)
+	}
+	if _, err := selfSignedSubject("ip", "example.com"); err == nil {
+		t.Fatal("public IP certificate accepted a DNS name")
+	}
+	if _, err := parseListenerOptions([]string{"--generate-self-signed"}); err == nil {
+		t.Fatal("removed self-signed flags remain accepted")
+	}
+}
+
+func TestProvidedCertificateRequiresOwnerMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "listener.pem")
+	if err := os.WriteFile(path, []byte("pem"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProvidedCertificate(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProvidedCertificate(path); err == nil {
+		t.Fatal("provided certificate accepted permissions other than 0600")
+	}
+}
+
+func TestCLIConfigurationDoesNotStartServicesByDefault(t *testing.T) {
+	start, err := shouldStartServices(&App{AssumeYes: true}, true, nil)
+	if err != nil || start {
+		t.Fatalf("shouldStartServices() = %v, %v; want false, nil", start, err)
 	}
 }
 

@@ -387,8 +387,9 @@ ExecStart=/usr/local/bin/proxyble-rule-agent <http-or-tcp>
 User=root
 Group=root
 UMask=0077
-RuntimeDirectory=proxyble-rule-agent
+RuntimeDirectory=proxyble-rule-agent proxyble/locks
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -410,6 +411,8 @@ ReadWritePaths=/var/spool/proxyble/rules
 ReadWritePaths=/var/lib/proxyble-rule-agent
 ReadWritePaths=/var/log/proxyble-rule-agent
 ReadWritePaths=/run/proxyble-rule-agent
+ReadWritePaths=/run/proxyble/locks
+ReadWritePaths=/etc/haproxy/maps
 After=network.target nftables.service haproxy.service
 Wants=nftables.service haproxy.service
 ```
@@ -419,7 +422,11 @@ The capability set is deliberately narrow. `CAP_NET_ADMIN` is required for
 `CAP_CHOWN` lets the root process recreate the `root:riodb` inbox after the
 file swap. The service should not need general filesystem override capability,
 internet sockets, home-directory access, device access, or writes outside the
-listed paths.
+listed paths. The shared locks runtime directory is created at service startup
+and preserved between one-shot runs so Proxyble processes always coordinate on
+the same lock files. Its write allowance permits serialized nftables and
+HAProxy updates, and the HAProxy maps path is the narrow exception under `/etc`
+required for HAProxy-backed rules while `ProtectSystem=strict` is active.
 
 `proxyble-rule-agent.path` watches the inbox:
 

@@ -50,7 +50,10 @@ const (
 const (
 	minMenuBodyWidth       = 76
 	preferredMenuBodyWidth = 120
-	wizardReturnTip        = "Press ESC key to return."
+	wizardReturnTip        = "Press Esc to go back to previous menu."
+	navigationMenuTip      = "Press Up/Down and Enter to make a selection. " + wizardReturnTip
+	confirmationMenuTip    = "Press Up/Down and Enter to make a selection. Press Esc to cancel this action."
+	continueTip            = "Press any key to continue"
 	confirmMenuLabelWidth  = 16
 )
 
@@ -95,7 +98,7 @@ func banner(w io.Writer, logPath string) {
 	line(colorBlueDark, "     ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚══════╝")
 	line(colorBlueDark, "")
 	line(colorBlueDark, "      Real-time API protection for the agent-driven web.")
-	line(colorBlueDark, "      [proxyble] Version 2026-6        log:"+logPath)
+	line(colorBlueDark, "      [proxyble] Version "+proxybleVersion+"        log:"+logPath)
 	fmt.Fprintf(w, "%s╰%s╯%s\n", colorBlueLight, strings.Repeat("─", width), colorReset)
 }
 
@@ -168,7 +171,7 @@ func printIntroText(w io.Writer, text string) {
 	}
 }
 
-// confirm asks the operator to continue or return. Interactive terminals get the
+// confirm asks the operator to continue or cancel. Interactive terminals get the
 // same arrow-key selection style as the main menus; non-interactive callers must
 // still opt in with --yes so unattended runs cannot accidentally proceed.
 func confirm(prompt string, assumeYes bool) (bool, error) {
@@ -322,8 +325,8 @@ func numberedConfirm(actionLabel, detail string) (bool, error) {
 			fmt.Fprintf(os.Stderr, "%s\n\n", strings.TrimSpace(detail))
 		}
 		fmt.Fprintf(os.Stderr, "  1. %s\n", actionLabel)
-		fmt.Fprintf(os.Stderr, "  2. %-*s%s\n", confirmMenuLabelWidth, "back", "Return to previous menu")
-		printWizardReturnTip(os.Stderr, "")
+		fmt.Fprintf(os.Stderr, "  2. %s\n", "Cancel")
+		printWizardTip(os.Stderr, confirmationMenuTip)
 		fmt.Fprint(os.Stderr, "Select option: ")
 		line, err := readWizardLine(os.Stdin)
 		if errors.Is(err, errWizardBack) {
@@ -365,7 +368,7 @@ func confirmMenuLines(actionLabel, detail string, selected int) []string {
 		}
 		lines = append(lines, "")
 	}
-	options := []string{actionLabel, fmt.Sprintf("%-*s%s", confirmMenuLabelWidth, "back", "Return to previous menu")}
+	options := []string{actionLabel, "Cancel"}
 	for i, option := range options {
 		marker := " "
 		if i == selected {
@@ -381,7 +384,7 @@ func confirmMenuLines(actionLabel, detail string, selected int) []string {
 		}
 		lines = append(lines, row)
 	}
-	lines = append(lines, colorDim+wizardReturnTipLine("Use Up/Down and Enter. ")+colorReset)
+	lines = append(lines, colorDim+confirmationMenuTip+colorReset)
 	return lines
 }
 
@@ -507,6 +510,10 @@ func printWizardReturnTip(w io.Writer, prefix string) {
 	fmt.Fprintf(w, "\n%s%s%s\n\n", colorDim, wizardReturnTipLine(prefix), colorReset)
 }
 
+func printWizardTip(w io.Writer, tip string) {
+	fmt.Fprintf(w, "\n%s%s%s\n\n", colorDim, tip, colorReset)
+}
+
 // readWizardLine reads an editable value while making a lone ESC immediately
 // return to the previous wizard menu. Raw mode is used on supported terminals;
 // limited-terminal fallbacks also recognize an ESC byte followed by Enter.
@@ -594,9 +601,15 @@ func menu(title, prompt string, items [][2]string) (string, error) {
 // choiceMenu selects arrow-key navigation when possible and falls back to a
 // numbered menu for limited terminals.
 func choiceMenu(title, prompt string, items [][2]string, selectedTag string, minimumLabelWidth ...int) (string, error) {
+	if selectedTag == "" {
+		selectedTag = rememberedMenuSelections[title]
+	}
 	if supportsArrowMenu() {
 		choice, err := arrowMenu(title, prompt, items, selectedIndex(items, selectedTag), minimumLabelWidth...)
 		if err == nil {
+			if choice != menuCancelChoice(items) {
+				rememberedMenuSelections[title] = choice
+			}
 			return choice, nil
 		}
 		if !errors.Is(err, errArrowMenuUnavailable) {
@@ -609,6 +622,8 @@ func choiceMenu(title, prompt string, items [][2]string, selectedTag string, min
 // errArrowMenuUnavailable signals that the caller should use the numbered menu
 // fallback instead of treating raw terminal setup as fatal.
 var errArrowMenuUnavailable = errors.New("arrow menu unavailable")
+
+var rememberedMenuSelections = map[string]string{}
 
 // supportsArrowMenu reports whether raw-key menus are likely to work.
 func supportsArrowMenu() bool {
@@ -716,7 +731,7 @@ func renderArrowMenu(title, prompt string, items [][2]string, selected int, mini
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, wizardReturnTipLine("Use Up/Down and Enter. "), colorReset)
+	fmt.Fprintf(os.Stderr, "\n%s%s%s", colorDim, menuSelectionTip(items), colorReset)
 }
 
 // menuLabelWidth returns the label column width needed to keep menu descriptions
@@ -813,6 +828,12 @@ func menuTagParts(tag string) (string, string, bool) {
 			label = choice
 		}
 	}
+	if label == choice {
+		switch choice {
+		case "back", "cancel", "exit":
+			label = strings.ToUpper(choice[:1]) + choice[1:]
+		}
+	}
 	return choice, label, warning
 }
 
@@ -853,6 +874,10 @@ func readMenuKey(f *os.File) (string, error) {
 				return "up", nil
 			case 'B':
 				return "down", nil
+			case 'C':
+				return "right", nil
+			case 'D':
+				return "left", nil
 			case 'H':
 				return "home", nil
 			case 'F':
@@ -945,6 +970,13 @@ func menuCancelChoice(items [][2]string) string {
 	return "exit"
 }
 
+func menuSelectionTip(items [][2]string) string {
+	if len(items) > 0 && menuChoiceTag(items[len(items)-1][0]) == "cancel" {
+		return confirmationMenuTip
+	}
+	return navigationMenuTip
+}
+
 // numberedMenu is the portable fallback for terminals that cannot support raw
 // arrow-key input.
 func numberedMenu(title, prompt string, items [][2]string, minimumLabelWidth ...int) (string, error) {
@@ -973,7 +1005,7 @@ func numberedMenu(title, prompt string, items [][2]string, minimumLabelWidth ...
 				fmt.Fprintf(os.Stderr, "%s%s\n", continuationPrefix, line)
 			}
 		}
-		printWizardReturnTip(os.Stderr, "")
+		printWizardTip(os.Stderr, menuSelectionTip(items))
 		fmt.Fprint(os.Stderr, "Select option: ")
 		line, err := readWizardLine(os.Stdin)
 		if errors.Is(err, errWizardBack) {
@@ -1008,7 +1040,7 @@ func scrollableText(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		return waitForWizardReturn()
+		return waitForAnyKey()
 	}
 	restore, err := makeTerminalRaw(os.Stdin)
 	if err != nil {
@@ -1017,7 +1049,7 @@ func scrollableText(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		return waitForWizardReturn()
+		return waitForAnyKey()
 	}
 	defer restore()
 	fmt.Fprint(os.Stderr, "\033[?25l")
@@ -1062,7 +1094,7 @@ func scrollableTextRequiredEnd(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		return waitForWizardReturn()
+		return waitForAnyKey()
 	}
 	restore, err := makeTerminalRaw(os.Stdin)
 	if err != nil {
@@ -1071,7 +1103,7 @@ func scrollableTextRequiredEnd(title, prompt string, lines []string) error {
 		for _, line := range lines {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		return waitForWizardReturn()
+		return waitForAnyKey()
 	}
 	defer restore()
 	fmt.Fprint(os.Stderr, "\033[?25l")
@@ -1085,6 +1117,10 @@ func scrollableTextRequiredEnd(title, prompt string, lines []string) error {
 		key, err := readMenuKey(os.Stdin)
 		if err != nil {
 			return err
+		}
+		if atEnd && key != "interrupt" {
+			clearScreen()
+			return nil
 		}
 		switch key {
 		case "up":
@@ -1147,7 +1183,7 @@ func renderScrollableTextRequiredEnd(title, prompt string, lines []string, offse
 	contentRows := renderScrollableText(title, prompt, lines, offset)
 	maxOffset := max(0, len(lines)-contentRows)
 	if offset >= maxOffset {
-		fmt.Fprintf(os.Stderr, "\r\033[2K%s%s%s", colorDim, wizardReturnTipLine("End of license. Press Enter to continue. "), colorReset)
+		fmt.Fprintf(os.Stderr, "\r\033[2K%s%s%s", colorDim, continueTip, colorReset)
 	} else {
 		fmt.Fprintf(os.Stderr, "\r\033[2K%s%s%s", colorDim, wizardReturnTipLine("Showing license lines. Scroll to the end to continue. "), colorReset)
 	}
@@ -1180,60 +1216,36 @@ func max(a, b int) int {
 	return b
 }
 
-// pause waits for ESC (or the legacy Enter/q shortcuts) so users can read
-// action results before returning to the previous menu.
+// pause lets users read action results before continuing.
 func pause() {
-	_ = waitForWizardReturn()
+	_ = waitForAnyKey()
 }
 
-func waitForWizardReturn() error {
+func waitForAnyKey() error {
+	return waitForAnyKeyPrompt(colorDim + continueTip + colorReset)
+}
+
+func waitForAnyKeyPrompt(prompt string) error {
 	if !isTerminal(os.Stdin) {
 		return nil
 	}
-	printWizardReturnTip(os.Stderr, "")
+	fmt.Fprint(os.Stderr, "\n"+prompt)
 	restore, err := makeTerminalRaw(os.Stdin)
 	if err != nil {
-		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
-		if strings.ContainsRune(line, '\x1b') {
-			return errWizardBack
-		}
-		return readErr
+		_, err = bufio.NewReader(os.Stdin).ReadString('\n')
+		return err
 	}
 	defer restore()
-	for {
-		key, err := readMenuKey(os.Stdin)
-		if err != nil {
-			return err
-		}
-		switch key {
-		case "escape":
-			fmt.Fprintln(os.Stderr)
-			return errWizardBack
-		case "enter", "q":
-			fmt.Fprintln(os.Stderr)
-			return nil
-		case "interrupt":
-			handleInterruptRequest()
-		}
-	}
-}
-
-func pauseAnyKeyExit() {
-	if !isTerminal(os.Stdin) {
-		return
-	}
-	fmt.Fprint(os.Stderr, "\n"+uninstallExitPrompt())
-	restore, err := makeTerminalRaw(os.Stdin)
-	if err != nil {
-		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
-		return
-	}
-	defer restore()
-	b, _ := readRequiredByte(os.Stdin)
+	b, err := readRequiredByte(os.Stdin)
 	if b == 0x03 {
 		handleInterruptRequest()
 	}
 	fmt.Fprintln(os.Stderr)
+	return err
+}
+
+func pauseAnyKeyExit() {
+	_ = waitForAnyKeyPrompt(uninstallExitPrompt())
 }
 
 func uninstallExitPrompt() string {

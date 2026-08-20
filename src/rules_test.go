@@ -16,16 +16,122 @@
 
 package main
 
-// rules_test.go covers regressions in manual rule CLI parsing and validation.
+// rules_test.go covers regressions in manual rule prompts, CLI parsing, and validation.
 // Keep these tests focused on behavior that previously broke during the bash to
 // Go conversion.
 
 import (
 	"context"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRuleParameterPromptsApplyAndDisplayDefaults(t *testing.T) {
+	tests := []struct {
+		rule      string
+		label     string
+		validator string
+	}{
+		{rule: "LIMIT_BANDWIDTH", label: "Bandwidth", validator: "bandwidth"},
+		{rule: "LIMIT_CONCURRENT", label: "Maximum concurrent connections", validator: "integer"},
+		{rule: "LIMIT_CONN_RATE", label: "Connection rate", validator: "rate"},
+		{rule: "LIMIT_ENDPOINT_RATE", label: "Endpoint request rate", validator: "rate"},
+		{rule: "TIMEOUT", label: "Backend timeout", validator: "timeout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rule, func(t *testing.T) {
+			defaultValue := ruleDefaultParam[tt.rule]
+			value, output, err := runRulePrompt(t, "\n", func() (string, error) {
+				return promptRuleParameter(tt.rule, tt.label, defaultValue, "Help text.", tt.validator)
+			})
+			if err != nil {
+				t.Fatalf("promptRuleParameter() error = %v", err)
+			}
+			if value != defaultValue {
+				t.Fatalf("promptRuleParameter() = %q, want default %q", value, defaultValue)
+			}
+			if !strings.Contains(output, "["+defaultValue+"]") {
+				t.Fatalf("prompt output does not display default [%s]:\n%s", defaultValue, output)
+			}
+		})
+	}
+}
+
+func TestEndpointAndExpirationPromptsApplyAndDisplayDefaults(t *testing.T) {
+	tests := []struct {
+		name         string
+		defaultValue string
+		prompt       func() (string, error)
+	}{
+		{
+			name:         "endpoint prefixes",
+			defaultValue: "/login,/api/export",
+			prompt: func() (string, error) {
+				return promptEndpointList("LIMIT_ENDPOINT_RATE")
+			},
+		},
+		{
+			name:         "expiration",
+			defaultValue: ruleDefaultExpiration,
+			prompt: func() (string, error) {
+				return promptRuleExpiration("DROP")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, output, err := runRulePrompt(t, "\n", tt.prompt)
+			if err != nil {
+				t.Fatalf("rule prompt error = %v", err)
+			}
+			if value != tt.defaultValue {
+				t.Fatalf("rule prompt = %q, want default %q", value, tt.defaultValue)
+			}
+			if !strings.Contains(output, "["+tt.defaultValue+"]") {
+				t.Fatalf("prompt output does not display default [%s]:\n%s", tt.defaultValue, output)
+			}
+		})
+	}
+}
+
+func runRulePrompt(t *testing.T, input string, prompt func() (string, error)) (string, string, error) {
+	t.Helper()
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdinReader.Close()
+		_ = stdinWriter.Close()
+		t.Fatal(err)
+	}
+	oldStdin, oldStderr := os.Stdin, os.Stderr
+	os.Stdin, os.Stderr = stdinReader, stderrWriter
+	defer func() {
+		os.Stdin, os.Stderr = oldStdin, oldStderr
+		_ = stdinReader.Close()
+		_ = stderrReader.Close()
+	}()
+	if _, err := io.WriteString(stdinWriter, input); err != nil {
+		t.Fatal(err)
+	}
+	if err := stdinWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	value, promptErr := prompt()
+	if err := stderrWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(stderrReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value, string(output), promptErr
+}
 
 // TestParseRuleAddArgsAcceptsYesFlag ensures --rules-add accepts the global-like
 // --yes flag when invoked from interactive flows.
@@ -47,7 +153,7 @@ func TestParseRuleAddArgsAcceptsYesFlag(t *testing.T) {
 func TestCommandLineRuleAddRequiresFlags(t *testing.T) {
 	app := &App{CommandLine: true}
 	err := addRule(context.Background(), app, nil)
-	if err == nil || !strings.Contains(err.Error(), "--rules-add requires --rule, --target, and --expiration") {
+	if err == nil || !strings.Contains(err.Error(), "--rules-add requires --rule and --target") {
 		t.Fatalf("addRule command-line missing flags error = %v", err)
 	}
 }
@@ -74,21 +180,23 @@ func TestCommandLineResetRequiresTypeBeforeStateLookup(t *testing.T) {
 	}
 }
 
-func TestPrepareRuleDraftAcceptsGlobalLimitConcurrent(t *testing.T) {
+func TestRuleAddArgsWithoutExpirationDefaultToPermanent(t *testing.T) {
 	cfg := &Config{Data: map[string]map[string]string{
-		"traffic": {"mode": "tcp"},
+		"traffic": {"mode": "http"},
 	}}
-	draft, err := prepareRuleDraft(cfg, map[string]string{
-		"rule":       "LIMIT_CONCURRENT",
-		"target":     "0.0.0.0/0",
-		"parameter":  "50",
-		"expiration": "none",
-	})
+	fields, err := parseRuleAddArgs([]string{"--rule", "LIMIT_BANDWIDTH", "--target", "0.0.0.0/0", "--bandwidth", "10mb"})
+	if err != nil {
+		t.Fatalf("parseRuleAddArgs() error = %v", err)
+	}
+	draft, err := prepareRuleDraft(cfg, fields)
 	if err != nil {
 		t.Fatalf("prepareRuleDraft() error = %v", err)
 	}
-	if draft.Line != "LIMIT_CONCURRENT 0.0.0.0/0 50" {
-		t.Fatalf("draft line = %q, want LIMIT_CONCURRENT 0.0.0.0/0 50", draft.Line)
+	if draft.Expiration != ruleDefaultExpiration {
+		t.Fatalf("draft expiration = %q, want %q", draft.Expiration, ruleDefaultExpiration)
+	}
+	if draft.Line != "LIMIT_BANDWIDTH 0.0.0.0/0 10mb" {
+		t.Fatalf("draft line = %q, want LIMIT_BANDWIDTH 0.0.0.0/0 10mb", draft.Line)
 	}
 }
 
@@ -159,6 +267,86 @@ func TestPrepareRuleDraftNormalizesCIDRHostBits(t *testing.T) {
 				t.Fatalf("draft line = %q, want %q", draft.Line, tt.wantLine)
 			}
 		})
+	}
+}
+
+func TestVerifyRulePersistedForEveryRuleType(t *testing.T) {
+	dir := t.TempDir()
+	paths := rulePaths{
+		NFTState:     filepath.Join(dir, "rule_state_nft.json"),
+		HAProxyState: filepath.Join(dir, "rule_state_haproxy.json"),
+	}
+	nftState := stateFile{Rules: map[string]map[string]any{}, Extra: map[string]any{}}
+	haState := stateFile{Rules: map[string]map[string]any{}, Extra: map[string]any{}}
+	drafts := []ruleDraft{
+		{Rule: "BUSY_DEFLECTION", Target: "0.0.0.0/0", Expiration: "none"},
+		{Rule: "DROP", Target: "192.0.2.2", Expiration: "none"},
+		{Rule: "LIMIT_BANDWIDTH", Target: "192.0.2.3", Parameter: "10mb", Expiration: "none"},
+		{Rule: "LIMIT_CONCURRENT", Target: "0.0.0.0/0", Parameter: "50", Expiration: "none"},
+		{Rule: "LIMIT_CONN_RATE", Target: "0.0.0.0/0", Parameter: "25/second", Expiration: "none"},
+		{Rule: "LIMIT_ENDPOINT_RATE", Target: "192.0.2.6", Parameter: "10/second", Endpoints: "/login,/api/export", Expiration: "none"},
+		{Rule: "LIMIT_RATE_SLOW", Target: "0.0.0.0/0", Expiration: "none"},
+		{Rule: "REJECT", Target: "192.0.2.8", Expiration: "none"},
+		{Rule: "TIMEOUT", Target: "0.0.0.0/0", Parameter: "5s", Expiration: "none"},
+	}
+	if len(drafts) != len(knownActions) {
+		t.Fatalf("test drafts cover %d rules, want all %d known actions", len(drafts), len(knownActions))
+	}
+	for _, draft := range drafts {
+		target := draft.Target
+		if draft.Rule != "LIMIT_ENDPOINT_RATE" && !strings.Contains(target, "/") {
+			target += "/32"
+		}
+		policy := map[string]any{
+			"ip":        target,
+			"action":    draft.Rule,
+			"parameter": draft.Parameter,
+		}
+		if draft.Endpoints != "" {
+			policy["endpoints"] = []any{"/api/export", "/login"}
+		}
+		switch draft.Rule {
+		case "DROP", "REJECT", "LIMIT_CONCURRENT", "LIMIT_CONN_RATE":
+			nftState.Rules[draft.Rule+"|"+target] = policy
+		default:
+			haState.Rules[draft.Rule+"|"+target] = policy
+		}
+	}
+	if err := saveRuleState(paths.NFTState, nftState); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveRuleState(paths.HAProxyState, haState); err != nil {
+		t.Fatal(err)
+	}
+	for _, draft := range drafts {
+		t.Run(draft.Rule, func(t *testing.T) {
+			if err := verifyRulePersisted(paths, draft); err != nil {
+				t.Fatalf("verifyRulePersisted() error = %v", err)
+			}
+		})
+	}
+	counts, total, err := countRules(paths)
+	if err != nil || total != len(drafts) || counts["TIMEOUT"] != 1 {
+		t.Fatalf("countRules() = counts %#v, total %d, err %v", counts, total, err)
+	}
+
+	missing := drafts[len(drafts)-1]
+	missing.Target = "198.51.100.10"
+	if err := verifyRulePersisted(paths, missing); err == nil {
+		t.Fatal("verifyRulePersisted() should reject a rule missing from agent state")
+	}
+}
+
+func TestValidEndpointListMatchesRuleAgentContract(t *testing.T) {
+	for _, value := range []string{"/login", "/api/export,/users/@me", "/price/$value;v=1"} {
+		if !validEndpointList(value) {
+			t.Fatalf("validEndpointList(%q) = false, want true", value)
+		}
+	}
+	for _, value := range []string{"", "/", "login", "/search?q=test", "/path#fragment", "/one,,/two"} {
+		if validEndpointList(value) {
+			t.Fatalf("validEndpointList(%q) = true, want false", value)
+		}
 	}
 }
 

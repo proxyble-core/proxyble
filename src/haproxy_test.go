@@ -269,7 +269,7 @@ func TestEnsureHAProxyBinaryReusesWorkingManualInstallation(t *testing.T) {
 	t.Setenv("PATH", binDir)
 
 	var out bytes.Buffer
-	installed, err := ensureHAProxyBinary(context.Background(), &out, Platform{PackageManager: "apt-get"}, &packageMetadataSession{})
+	installed, err := ensureHAProxyBinary(context.Background(), &out, Platform{PackageManager: "apt-get"}, &packageMetadataSession{}, testHAProxyDependency())
 	if err != nil {
 		t.Fatalf("ensureHAProxyBinary returned error: %v", err)
 	}
@@ -302,12 +302,15 @@ esac
 	if err := os.WriteFile(filepath.Join(binDir, "dpkg-query"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(binDir, "apt-cache"), []byte("#!/bin/sh\necho ' haproxy | 2.8.26-1 | http://example.test stable/main amd64 Packages'\necho ' haproxy | 3.0.25-1 | http://example.test stable/main amd64 Packages'\necho ' haproxy | 3.1.1-1 | http://example.test stable/main amd64 Packages'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("PATH", binDir)
 	configPath := filepath.Join(t.TempDir(), "config.ini")
 	if err := os.WriteFile(configPath, []byte("[haproxy]\ninstalled_by_proxyble=false\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	app := &App{Config: &Config{Path: configPath, Data: map[string]map[string]string{
+	app := &App{Dependencies: testDependencySettings(), Config: &Config{Path: configPath, Data: map[string]map[string]string{
 		"haproxy": {"installed_by_proxyble": "false"},
 	}}}
 
@@ -326,7 +329,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"update", "install -y haproxy"} {
+	for _, want := range []string{"update", "install -y haproxy=3.0.25-1"} {
 		if !strings.Contains(string(commands), want) {
 			t.Fatalf("apt-get command log missing %q:\n%s", want, commands)
 		}
@@ -337,6 +340,55 @@ esac
 	if !strings.Contains(out.String(), "HAProxy package installation completed (HAProxy version 3.0.25)") {
 		t.Fatalf("installation verification output missing:\n%s", out.String())
 	}
+}
+
+func TestEnsureHAProxyBinaryRejectsUnsupportedExistingVersionWithoutRepositoryCandidate(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "haproxy"), []byte("#!/bin/sh\necho 'HAProxy version 3.1.2'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "apt-get"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "apt-cache"), []byte("#!/bin/sh\necho ' haproxy | 3.1.2-1 | http://example.test stable/main amd64 Packages'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	var out bytes.Buffer
+	_, err := ensureHAProxyBinary(context.Background(), &out, Platform{PackageManager: "apt-get"}, &packageMetadataSession{}, testHAProxyDependency())
+	if err == nil || !strings.Contains(err.Error(), "manually install HAProxy >=2.8.0 and <3.1.0") {
+		t.Fatalf("expected manual prerequisite error, got %v", err)
+	}
+}
+
+func TestHighestSupportedPackageVersion(t *testing.T) {
+	got, ok := highestSupportedPackageVersion([]string{"2.8.26-1", "3.1.2-1", "3.0.25-1", "3.0.24-2"}, testHAProxyDependency())
+	if !ok || got != "3.0.25-1" {
+		t.Fatalf("highest supported version = %q, %v; want 3.0.25-1, true", got, ok)
+	}
+}
+
+func TestEnsureHAProxyPackageRequiresManualInstallWithoutSupportedPackageManager(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	var out bytes.Buffer
+	app := &App{Dependencies: testDependencySettings()}
+	_, err := ensureHAProxyPackage(context.Background(), app, &out, Platform{}, &packageMetadataSession{})
+	if err == nil || !strings.Contains(err.Error(), "no supported package manager") || !strings.Contains(err.Error(), "manually install HAProxy") {
+		t.Fatalf("expected manual prerequisite error, got %v", err)
+	}
+}
+
+func testHAProxyDependency() HAProxyDependency {
+	return testDependencySettings().Dependencies.HAProxy
+}
+
+func testDependencySettings() DependencySettings {
+	return DependencySettings{Dependencies: Dependencies{HAProxy: HAProxyDependency{
+		Package:             "haproxy",
+		MinVersionSupported: "2.8.0",
+		MaxVersionExclusive: "3.1.0",
+	}}}
 }
 
 func testHAProxyConfig(mode string, riodbEnabledValue bool, udpPort string) *Config {

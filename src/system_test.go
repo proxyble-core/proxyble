@@ -418,8 +418,9 @@ func TestRenderRuleAgentServiceIncludesSandboxing(t *testing.T) {
 		"Type=oneshot",
 		"User=root",
 		"Group=root",
-		"RuntimeDirectory=proxyble-rule-agent",
+		"RuntimeDirectory=proxyble-rule-agent proxyble/locks",
 		"RuntimeDirectoryMode=0700",
+		"RuntimeDirectoryPreserve=yes",
 		"NoNewPrivileges=yes",
 		"ProtectSystem=strict",
 		"ProtectHome=yes",
@@ -432,6 +433,8 @@ func TestRenderRuleAgentServiceIncludesSandboxing(t *testing.T) {
 		"ReadWritePaths=/var/lib/proxyble-rule-agent",
 		"ReadWritePaths=/var/log/proxyble-rule-agent",
 		"ReadWritePaths=/run/proxyble-rule-agent",
+		"ReadWritePaths=/run/proxyble/locks",
+		"ReadWritePaths=/etc/haproxy/maps",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("rule-agent service is missing %q\n%s", want, body)
